@@ -260,6 +260,46 @@ func GetLatestClientTrafficTotals(clientUUID string) (TrafficTotals, error) {
 	return TrafficTotals{Up: latest.NetTotalUp, Down: latest.NetTotalDown}, nil
 }
 
+// GetLatestClientTrafficReset returns the most recent time at which the
+// cumulative traffic counters reported by an agent moved backwards. Agents
+// use that counter reset for their month-rotate boundary. The lookup covers
+// the last 62 days so a normal monthly reset remains visible even when one
+// month is longer than the next.
+func GetLatestClientTrafficReset(clientUUID string, now time.Time) (time.Time, bool, error) {
+	return getLatestClientTrafficResetWithDB(dbcore.GetDBInstance(), clientUUID, now.AddDate(0, 0, -62), now)
+}
+
+func getLatestClientTrafficResetWithDB(db *gorm.DB, clientUUID string, start, end time.Time) (time.Time, bool, error) {
+	var recentRecords []trafficDeltaRecord
+	if err := db.Table("records").
+		Select("time, net_total_up, net_total_down, traffic_up, traffic_down").
+		Where("client = ? AND time >= ? AND time <= ?", clientUUID, models.FromTime(start), models.FromTime(end)).
+		Find(&recentRecords).Error; err != nil {
+		return time.Time{}, false, err
+	}
+
+	var longTermRecords []trafficDeltaRecord
+	if err := db.Table("records_long_term").
+		Select("time, net_total_up, net_total_down, traffic_up, traffic_down").
+		Where("client = ? AND time >= ? AND time <= ?", clientUUID, models.FromTime(start), models.FromTime(end)).
+		Find(&longTermRecords).Error; err != nil {
+		return time.Time{}, false, err
+	}
+
+	records := mergeTrafficRecords(recentRecords, longTermRecords)
+	sort.Slice(records, func(i, j int) bool {
+		return records[i].Time.ToTime().Before(records[j].Time.ToTime())
+	})
+
+	var latest time.Time
+	for i := 1; i < len(records); i++ {
+		if records[i].NetTotalUp < records[i-1].NetTotalUp || records[i].NetTotalDown < records[i-1].NetTotalDown {
+			latest = records[i].Time.ToTime()
+		}
+	}
+	return latest, !latest.IsZero(), nil
+}
+
 func latestTrafficDeltaRecord(query *gorm.DB, clientUUID string) (*trafficDeltaRecord, error) {
 	var record trafficDeltaRecord
 	err := query.

@@ -49,6 +49,7 @@ func TestAuthorizationAllowsMatchingPrivateChat(t *testing.T) {
 
 func TestSetCommandsAndGetUpdates(t *testing.T) {
 	var commandCount int
+	var menuButtonSet bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		require.Equal(t, http.MethodPost, r.Method)
 		body, err := io.ReadAll(r.Body)
@@ -61,6 +62,12 @@ func TestSetCommandsAndGetUpdates(t *testing.T) {
 			var commands []map[string]string
 			require.NoError(t, json.Unmarshal([]byte(values.Get("commands")), &commands))
 			commandCount = len(commands)
+			assert.Contains(t, values.Get("scope"), `"type":"chat"`)
+			_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
+		case strings.HasSuffix(r.URL.Path, "/setChatMenuButton"):
+			assert.Equal(t, "42", values.Get("chat_id"))
+			assert.JSONEq(t, `{"type":"commands"}`, values.Get("menu_button"))
+			menuButtonSet = true
 			_, _ = io.WriteString(w, `{"ok":true,"result":true}`)
 		case strings.HasSuffix(r.URL.Path, "/getUpdates"):
 			assert.Equal(t, "25", values.Get("timeout"))
@@ -71,9 +78,10 @@ func TestSetCommandsAndGetUpdates(t *testing.T) {
 	}))
 	defer server.Close()
 
-	b := &bot{baseURL: server.URL + "/bot-token", client: server.Client()}
-	require.NoError(t, b.setCommands(context.Background()))
-	assert.Equal(t, 7, commandCount)
+	b := &bot{baseURL: server.URL + "/bot-token", chatID: 42, client: server.Client()}
+	require.NoError(t, b.configureMenu(context.Background()))
+	assert.Equal(t, 9, commandCount)
+	assert.True(t, menuButtonSet)
 
 	updates, err := b.getUpdates(context.Background(), 10)
 	require.NoError(t, err)

@@ -223,7 +223,7 @@ func parseIDs(raw string) (map[int64]struct{}, error) {
 }
 
 func (b *bot) run(ctx context.Context) {
-	if err := b.setCommands(ctx); err != nil {
+	if err := b.configureMenu(ctx); err != nil {
 		log.Printf("Failed to register Telegram command menu: %v", err)
 	}
 	log.Printf("Telegram command menu started (timezone=%s)", b.commandTimezone)
@@ -302,6 +302,8 @@ func (b *bot) handleCommand(ctx context.Context, text string) {
 		b.sendRange(ctx, strings.TrimPrefix(command, "/"), selector)
 	case "/cycle":
 		b.sendCycle(ctx, selector)
+	case "/reset":
+		b.sendReset(ctx, selector)
 	case "/status":
 		b.sendStatus(ctx, selector)
 	case "/report":
@@ -330,23 +332,46 @@ func (b *bot) handleCallback(ctx context.Context, data string) {
 		b.sendRange(ctx, action, uuid)
 	case "cycle":
 		b.sendCycle(ctx, uuid)
+	case "reset":
+		b.sendReset(ctx, uuid)
 	case "status":
 		b.sendStatus(ctx, uuid)
 	}
 }
 
-func (b *bot) setCommands(ctx context.Context) error {
+func (b *bot) configureMenu(ctx context.Context) error {
 	commands := []map[string]string{
-		{"command": "nodes", "description": "选择监控节点"},
-		{"command": "today", "description": "查看今日流量"},
-		{"command": "yesterday", "description": "查看昨日流量"},
-		{"command": "cycle", "description": "查看当前流量周期"},
-		{"command": "status", "description": "查看节点在线状态"},
-		{"command": "report", "description": "立即生成完整报告"},
-		{"command": "help", "description": "查看使用说明"},
+		{"command": "start", "description": "启动 Komari 流量机器人"},
+		{"command": "nodes", "description": "选择一台监控机器"},
+		{"command": "today", "description": "查询每台机器今日流量"},
+		{"command": "yesterday", "description": "查询每台机器昨日流量"},
+		{"command": "cycle", "description": "查询当前周期累计流量"},
+		{"command": "reset", "description": "查询每台机器流量重置日"},
+		{"command": "status", "description": "查询机器在线与运行状态"},
+		{"command": "report", "description": "立即生成完整流量报告"},
+		{"command": "help", "description": "查看命令使用说明"},
 	}
 	encoded, _ := json.Marshal(commands)
-	return b.call(ctx, "setMyCommands", url.Values{"commands": {string(encoded)}}, nil)
+	scope, _ := json.Marshal(map[string]any{"type": "chat", "chat_id": b.chatID})
+	if err := b.call(ctx, "setMyCommands", url.Values{
+		"commands": {string(encoded)},
+		"scope":    {string(scope)},
+	}, nil); err != nil {
+		return err
+	}
+
+	// Telegram exposes the blue command button in private chats when the chat
+	// menu button is explicitly set to the commands type.
+	if b.chatID > 0 {
+		menuButton, _ := json.Marshal(map[string]string{"type": "commands"})
+		if err := b.call(ctx, "setChatMenuButton", url.Values{
+			"chat_id":     {strconv.FormatInt(b.chatID, 10)},
+			"menu_button": {string(menuButton)},
+		}, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (b *bot) getUpdates(ctx context.Context, offset int64) ([]update, error) {
@@ -413,17 +438,21 @@ func (b *bot) call(ctx context.Context, method string, values url.Values, output
 }
 
 func helpText() string {
-	return `<b>Komari 流量机器人</b>
+	return `<b>🤖 Komari 流量助手</b>
+━━━━━━━━━━━━━━
+<b>📊 流量查询</b>
+/today — 今日流量
+/yesterday — 昨日流量
+/cycle — 当前周期累计
+/reset — 每台机器流量重置日
 
-/nodes — 选择节点
-/today [节点] — 今日流量
-/yesterday [节点] — 昨日流量
-/cycle [节点] — 探针当前统计周期
-/status [节点] — 在线状态
-/report [节点] — 完整报告
-/help — 使用说明
+<b>🖥 节点管理</b>
+/nodes — 选择监控机器
+/status — 在线与运行状态
+/report — 立即生成完整报告
 
-节点参数可以是名称或 UUID；省略时显示全部节点。`
+<b>💡 使用提示</b>
+命令后可附机器名称或 UUID；不填写时查询全部机器。`
 }
 
 func (b *bot) sendNodes(ctx context.Context) {
@@ -448,7 +477,7 @@ func (b *bot) sendNodes(ctx context.Context) {
 		}
 		rows = append(rows, row)
 	}
-	_ = b.send(ctx, "<b>请选择节点</b>\n🟢 在线　⚫ 离线", &inlineKeyboard{InlineKeyboard: rows})
+	_ = b.send(ctx, "<b>🖥 选择监控机器</b>\n━━━━━━━━━━━━━━\n🟢 在线　⚫ 离线\n\n点击机器名称查看详情：", &inlineKeyboard{InlineKeyboard: rows})
 }
 
 func (b *bot) sendNodeCard(ctx context.Context, client models.Client) {
@@ -456,10 +485,11 @@ func (b *bot) sendNodeCard(ctx context.Context, client models.Client) {
 	if isOnline(client.UUID) {
 		status = "🟢 在线"
 	}
-	text := fmt.Sprintf("<b>%s</b>\n状态：%s\nUUID：<code>%s</code>", html.EscapeString(displayName(client)), status, html.EscapeString(client.UUID))
+	text := fmt.Sprintf("<b>🖥 %s</b>\n━━━━━━━━━━━━━━\n<b>状态</b>　%s\n<b>UUID</b>　<code>%s</code>", html.EscapeString(displayName(client)), status, html.EscapeString(client.UUID))
 	keyboard := &inlineKeyboard{InlineKeyboard: [][]inlineButton{
-		{{Text: "今日流量", CallbackData: "today:" + client.UUID}, {Text: "昨日流量", CallbackData: "yesterday:" + client.UUID}},
-		{{Text: "当前周期", CallbackData: "cycle:" + client.UUID}, {Text: "运行状态", CallbackData: "status:" + client.UUID}},
+		{{Text: "📊 今日流量", CallbackData: "today:" + client.UUID}, {Text: "📅 昨日流量", CallbackData: "yesterday:" + client.UUID}},
+		{{Text: "🔄 当前周期", CallbackData: "cycle:" + client.UUID}, {Text: "🗓 重置日", CallbackData: "reset:" + client.UUID}},
+		{{Text: "🟢 运行状态", CallbackData: "status:" + client.UUID}},
 	}}
 	_ = b.send(ctx, text, keyboard)
 }
@@ -479,7 +509,7 @@ func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
-	lines := []string{fmt.Sprintf("<b>📊 %s</b>", label)}
+	lines := []string{fmt.Sprintf("<b>📊 %s</b>\n━━━━━━━━━━━━━━", label)}
 	for _, client := range list {
 		totals, err := notifier.GetClientTrafficTotalsInRange(client.UUID, start, end)
 		if err != nil {
@@ -488,7 +518,7 @@ func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 		}
 		lines = append(lines, formatTrafficLine(client, totals))
 	}
-	lines = append(lines, fmt.Sprintf("\n时区：<code>%s</code>", html.EscapeString(b.commandTimezone)))
+	lines = append(lines, fmt.Sprintf("\n━━━━━━━━━━━━━━\n🕒 时区　<code>%s</code>", html.EscapeString(b.commandTimezone)))
 	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
 }
 
@@ -499,7 +529,7 @@ func (b *bot) sendCycle(ctx context.Context, selector string) {
 		return
 	}
 	latest := agent_runtime.GetLatestReport()
-	lines := []string{"<b>🔄 探针当前统计周期</b>"}
+	lines := []string{"<b>🔄 当前周期累计流量</b>\n━━━━━━━━━━━━━━"}
 	for _, client := range list {
 		totals := notifier.TrafficTotals{}
 		if report := latest[client.UUID]; report != nil {
@@ -514,7 +544,33 @@ func (b *bot) sendCycle(ctx context.Context, selector string) {
 		}
 		lines = append(lines, formatTrafficLine(client, totals))
 	}
-	lines = append(lines, "\n周期边界由各探针的 <code>month-rotate</code> 设置决定。")
+	lines = append(lines, "\n━━━━━━━━━━━━━━\n💡 周期边界由探针的 <code>month-rotate</code> 设置决定。")
+	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
+}
+
+func (b *bot) sendReset(ctx context.Context, selector string) {
+	list, err := selectClients(selector)
+	if err != nil {
+		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		return
+	}
+	now := time.Now().In(b.location)
+	lines := []string{"<b>🗓 流量重置日</b>\n━━━━━━━━━━━━━━"}
+	for _, client := range list {
+		resetAt, found, err := notifier.GetLatestClientTrafficReset(client.UUID, now)
+		name := html.EscapeString(displayName(client))
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　⚠️ 查询失败", name))
+			continue
+		}
+		if !found {
+			lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　⏳ 近 62 天暂未检测到重置", name))
+			continue
+		}
+		local := resetAt.In(b.location)
+		lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　📆 推测每月 <b>%d 日</b>\n　🕒 最近重置 %s", name, local.Day(), local.Format("2006-01-02 15:04")))
+	}
+	lines = append(lines, "\n━━━━━━━━━━━━━━\n<i>依据探针累计流量计数器最近一次归零推断。</i>")
 	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
 }
 
@@ -525,7 +581,7 @@ func (b *bot) sendStatus(ctx context.Context, selector string) {
 		return
 	}
 	reports := agent_runtime.GetLatestReport()
-	lines := []string{"<b>🖥 节点状态</b>"}
+	lines := []string{"<b>🖥 机器运行状态</b>\n━━━━━━━━━━━━━━"}
 	for _, client := range list {
 		state := "⚫ 离线"
 		if isOnline(client.UUID) {
@@ -618,7 +674,7 @@ func isOnline(uuid string) bool {
 }
 
 func formatTrafficLine(client models.Client, totals notifier.TrafficTotals) string {
-	return fmt.Sprintf("<b>%s</b>\n　⬆️ %s　⬇️ %s　📦 %s", html.EscapeString(displayName(client)), humanBytes(totals.Up), humanBytes(totals.Down), humanBytes(totals.Up+totals.Down))
+	return fmt.Sprintf("\n<b>🖥 %s</b>\n　⬆️ 上传　%s\n　⬇️ 下载　%s\n　📦 合计　<b>%s</b>", html.EscapeString(displayName(client)), humanBytes(totals.Up), humanBytes(totals.Down), humanBytes(totals.Up+totals.Down))
 }
 
 func humanBytes(value int64) string {

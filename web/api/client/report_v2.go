@@ -80,6 +80,15 @@ func handleV2RPC(uuid string, req v2.Request, allowWait bool) v2.Response {
 		}
 		ingestPingResult(uuid, params.TaskID, params.Value, finishedAt)
 		return v2.Success(req.ID, gin.H{"status": "success"})
+	case v2.MethodAgentSSHLogin:
+		var params v2.SSHLoginParams
+		if err := bindV2Params(req.Params, &params); err != nil {
+			return v2.Error(req.ID, -32602, "invalid SSH login params", err.Error())
+		}
+		if err := notifier.NotifySSHLogin(uuid, params); err != nil {
+			return v2.Error(req.ID, -32602, "invalid SSH login event", err.Error())
+		}
+		return v2.Success(req.ID, gin.H{"status": "success"})
 	case v2.MethodAgentPull:
 		var params v2.PullParams
 		if err := bindV2Params(req.Params, &params); err != nil {

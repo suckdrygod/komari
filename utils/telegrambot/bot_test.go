@@ -80,7 +80,7 @@ func TestSetCommandsAndGetUpdates(t *testing.T) {
 
 	b := &bot{baseURL: server.URL + "/bot-token", chatID: 42, client: server.Client()}
 	require.NoError(t, b.configureMenu(context.Background()))
-	assert.Equal(t, 9, commandCount)
+	assert.Equal(t, 12, commandCount)
 	assert.True(t, menuButtonSet)
 
 	updates, err := b.getUpdates(context.Background(), 10)
@@ -116,4 +116,10 @@ func TestHumanBytes(t *testing.T) {
 	assert.Equal(t, "0 B", humanBytes(-1))
 	assert.Equal(t, "1.00 KB", humanBytes(1024))
 	assert.Equal(t, "1.50 GB", humanBytes(3*1024*1024*1024/2))
+}
+
+func TestProgressBarAndTrafficLimitType(t *testing.T) {
+	assert.Equal(t, "▰▰▰▰▰▱▱▱▱▱", progressBar(50))
+	assert.Equal(t, "max", normalizeTrafficLimitType(""))
+	assert.Equal(t, "sum", normalizeTrafficLimitType("SUM"))
 }

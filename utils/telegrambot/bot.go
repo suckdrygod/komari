@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -302,6 +303,12 @@ func (b *bot) handleCommand(ctx context.Context, text string) {
 		b.sendRange(ctx, strings.TrimPrefix(command, "/"), selector)
 	case "/cycle":
 		b.sendCycle(ctx, selector)
+	case "/total":
+		b.sendTotal(ctx, selector)
+	case "/alltotal":
+		b.sendAllTotal(ctx)
+	case "/remaining":
+		b.sendRemaining(ctx, selector)
 	case "/reset":
 		b.sendReset(ctx, selector)
 	case "/status":
@@ -332,6 +339,12 @@ func (b *bot) handleCallback(ctx context.Context, data string) {
 		b.sendRange(ctx, action, uuid)
 	case "cycle":
 		b.sendCycle(ctx, uuid)
+	case "total":
+		b.sendTotal(ctx, uuid)
+	case "alltotal":
+		b.sendAllTotal(ctx)
+	case "remaining":
+		b.sendRemaining(ctx, uuid)
 	case "reset":
 		b.sendReset(ctx, uuid)
 	case "status":
@@ -346,6 +359,9 @@ func (b *bot) configureMenu(ctx context.Context) error {
 		{"command": "today", "description": "查询每台机器今日流量"},
 		{"command": "yesterday", "description": "查询每台机器昨日流量"},
 		{"command": "cycle", "description": "查询当前周期累计流量"},
+		{"command": "total", "description": "查询机器累计总流量"},
+		{"command": "alltotal", "description": "查询所有机器累计总流量"},
+		{"command": "remaining", "description": "查询机器剩余总流量"},
 		{"command": "reset", "description": "查询每台机器流量重置日"},
 		{"command": "status", "description": "查询机器在线与运行状态"},
 		{"command": "report", "description": "立即生成完整流量报告"},
@@ -444,6 +460,9 @@ func helpText() string {
 /today — 今日流量
 /yesterday — 昨日流量
 /cycle — 当前周期累计
+/total — 累计总流量
+/alltotal — 所有机器累计总流量
+/remaining — 剩余总流量
 /reset — 每台机器流量重置日
 
 <b>🖥 节点管理</b>
@@ -470,6 +489,7 @@ func (b *bot) sendNodes(ctx context.Context) {
 		list = list[:maxNodes]
 	}
 	rows := make([][]inlineButton, 0, (len(list)+1)/2)
+	rows = append(rows, []inlineButton{{Text: "🌐 所有机器累计总流量", CallbackData: "alltotal:all"}})
 	for i := 0; i < len(list); i += 2 {
 		row := []inlineButton{{Text: onlineMark(list[i].UUID) + displayName(list[i]), CallbackData: "node:" + list[i].UUID}}
 		if i+1 < len(list) {
@@ -489,6 +509,7 @@ func (b *bot) sendNodeCard(ctx context.Context, client models.Client) {
 	keyboard := &inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "📊 今日流量", CallbackData: "today:" + client.UUID}, {Text: "📅 昨日流量", CallbackData: "yesterday:" + client.UUID}},
 		{{Text: "🔄 当前周期", CallbackData: "cycle:" + client.UUID}, {Text: "🗓 重置日", CallbackData: "reset:" + client.UUID}},
+		{{Text: "📊 累计总流量", CallbackData: "total:" + client.UUID}, {Text: "📦 剩余总流量", CallbackData: "remaining:" + client.UUID}},
 		{{Text: "🟢 运行状态", CallbackData: "status:" + client.UUID}},
 	}}
 	_ = b.send(ctx, text, keyboard)
@@ -523,13 +544,45 @@ func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 }
 
 func (b *bot) sendCycle(ctx context.Context, selector string) {
+	b.sendCumulative(ctx, selector, "🔄 当前周期累计流量")
+}
+
+func (b *bot) sendTotal(ctx context.Context, selector string) {
+	b.sendCumulative(ctx, selector, "📊 累计总流量")
+}
+
+func (b *bot) sendAllTotal(ctx context.Context) {
+	list, err := clients.GetAllClientBasicInfo()
+	if err != nil {
+		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		return
+	}
+	sortClients(list)
+	reports := agent_runtime.GetLatestReport()
+	var up, down int64
+	for _, client := range list {
+		if report := reports[client.UUID]; report != nil {
+			up += report.Network.TotalUp
+			down += report.Network.TotalDown
+			continue
+		}
+		if totals, queryErr := notifier.GetLatestClientTrafficTotals(client.UUID); queryErr == nil {
+			up += totals.Up
+			down += totals.Down
+		}
+	}
+	text := fmt.Sprintf("<b>🌐 所有机器累计总流量</b>\n━━━━━━━━━━━━━━\n　🖥 机器数量　<b>%d</b>\n　⬆️ 上传合计　%s\n　⬇️ 下载合计　%s\n　📦 流量总计　<b>%s</b>\n━━━━━━━━━━━━━━\n<i>各机器重置日可能不同，此处汇总每台机器各自当前周期的累计值。</i>", len(list), humanBytes(up), humanBytes(down), humanBytes(up+down))
+	_ = b.send(ctx, text, nil)
+}
+
+func (b *bot) sendCumulative(ctx context.Context, selector, title string) {
 	list, err := selectClients(selector)
 	if err != nil {
 		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
 	latest := agent_runtime.GetLatestReport()
-	lines := []string{"<b>🔄 当前周期累计流量</b>\n━━━━━━━━━━━━━━"}
+	lines := []string{fmt.Sprintf("<b>%s</b>\n━━━━━━━━━━━━━━", html.EscapeString(title))}
 	for _, client := range list {
 		totals := notifier.TrafficTotals{}
 		if report := latest[client.UUID]; report != nil {
@@ -588,6 +641,63 @@ func (b *bot) sendReset(ctx context.Context, selector string) {
 	}
 	lines = append(lines, "\n━━━━━━━━━━━━━━\n<i>新版探针显示精确配置；旧版探针降级为历史归零推断。</i>")
 	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
+}
+
+func (b *bot) sendRemaining(ctx context.Context, selector string) {
+	list, err := selectClients(selector)
+	if err != nil {
+		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		return
+	}
+	reports := agent_runtime.GetLatestReport()
+	lines := []string{"<b>📦 剩余总流量</b>\n━━━━━━━━━━━━━━"}
+	for _, client := range list {
+		name := html.EscapeString(displayName(client))
+		if client.TrafficLimit <= 0 {
+			lines = append(lines, fmt.Sprintf("\n<b>🖥 %s</b>\n　⚙️ 面板尚未设置流量上限", name))
+			continue
+		}
+		totals := notifier.TrafficTotals{}
+		if report := reports[client.UUID]; report != nil {
+			totals.Up = report.Network.TotalUp
+			totals.Down = report.Network.TotalDown
+		} else if latest, queryErr := notifier.GetLatestClientTrafficTotals(client.UUID); queryErr == nil {
+			totals = latest
+		}
+		used := notifier.ComputeUsedByType(strings.ToLower(client.TrafficLimitType), totals.Up, totals.Down)
+		remaining := client.TrafficLimit - used
+		if remaining < 0 {
+			remaining = 0
+		}
+		percent := float64(used) / float64(client.TrafficLimit) * 100
+		if percent > 100 {
+			percent = 100
+		}
+		lines = append(lines, fmt.Sprintf("\n<b>🖥 %s</b>\n　%s　%.1f%%\n　✅ 剩余　<b>%s</b>\n　📈 已用　%s / %s\n　🧮 口径　<code>%s</code>", name, progressBar(percent), percent, humanBytes(remaining), humanBytes(used), humanBytes(client.TrafficLimit), html.EscapeString(normalizeTrafficLimitType(client.TrafficLimitType))))
+	}
+	lines = append(lines, "\n━━━━━━━━━━━━━━\n<i>流量上限与统计口径来自面板的节点设置。</i>")
+	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
+}
+
+func progressBar(percent float64) string {
+	filled := int(math.Round(percent / 10))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > 10 {
+		filled = 10
+	}
+	return strings.Repeat("▰", filled) + strings.Repeat("▱", 10-filled)
+}
+
+func normalizeTrafficLimitType(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "up", "down", "sum", "min", "max":
+		return value
+	default:
+		return "max"
+	}
 }
 
 func (b *bot) sendStatus(ctx context.Context, selector string) {

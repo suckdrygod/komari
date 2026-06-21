@@ -106,14 +106,14 @@ func OfflineNotification(clientID string, endedConnectionID int64) {
 		state.isConnExist = false
 
 		// Send notification
-		message := fmt.Sprintf("🔴%s is offline", client.Name)
+		message := fmt.Sprintf("机器已离线，超过宽限期 %d 秒。", int(gracePeriod/time.Second))
 		go func(msg string) {
-			if err := messageSender.SendEvent(models.EventMessage{
+			if err := messageSender.SendEventAndEmailCopy(models.EventMessage{
 				Event:   messageevent.Offline,
 				Clients: []models.Client{client},
 				Time:    time.Now(),
-				//Message: msg,
-				Emoji: "🔴",
+				Message: msg,
+				Emoji:   "🔴",
 			}); err != nil {
 				log.Println("Failed to send offline notification:", err)
 			}
@@ -175,14 +175,14 @@ func OnlineNotification(clientID string, connectionID int64) {
 	}
 
 	// 规则4：客户端离线足够久已通知（或未待离线），现在重新上线，发送上线通知。
-	message := fmt.Sprintf("🟢%s is online", client.Name)
+	message := "机器连接已恢复，当前状态为在线。"
 	go func(msg string) {
-		if err := messageSender.SendEvent(models.EventMessage{
+		if err := messageSender.SendEventAndEmailCopy(models.EventMessage{
 			Event:   messageevent.Online,
 			Clients: []models.Client{client},
 			Time:    time.Now(),
-			//Message: msg,
-			Emoji: "🟢",
+			Message: msg,
+			Emoji:   "🟢",
 		}); err != nil {
 			log.Println("Failed to send online notification:", err)
 		}

@@ -535,7 +535,12 @@ func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 			_ = b.send(ctx, formatTrafficErrorCard(client), nil)
 			continue
 		}
-		if kind == "today" {
+		usedVnstat := false
+		if vnstatTotals, ok := notifier.GetClientVnstatRangeTotals(client, start, end); ok {
+			totals = vnstatTotals
+			usedVnstat = true
+		}
+		if kind == "today" && !usedVnstat {
 			if latest, latestErr := notifier.GetLatestClientTrafficTotals(client.UUID); latestErr == nil {
 				totals = capTrafficTotals(totals, latest)
 			}
@@ -545,7 +550,19 @@ func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 }
 
 func (b *bot) sendCycle(ctx context.Context, selector string) {
-	b.sendCumulative(ctx, selector, "周期")
+	list, err := selectClients(selector)
+	if err != nil {
+		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		return
+	}
+	now := time.Now().In(b.location)
+	for _, client := range list {
+		if totals, ok := notifier.GetClientVnstatCycleTotals(client, now); ok {
+			_ = b.send(ctx, formatTrafficCard(client, totals, "周期"), nil)
+			continue
+		}
+		b.sendCumulative(ctx, client.UUID, "周期")
+	}
 }
 
 func (b *bot) sendTotal(ctx context.Context, selector string) {
@@ -562,6 +579,11 @@ func (b *bot) sendAllTotal(ctx context.Context) {
 	reports := agent_runtime.GetLatestReport()
 	var up, down int64
 	for _, client := range list {
+		if totals, ok := notifier.GetClientVnstatLatestTotals(client); ok {
+			up += totals.Up
+			down += totals.Down
+			continue
+		}
 		if report := reports[client.UUID]; report != nil {
 			up += report.Network.TotalUp
 			down += report.Network.TotalDown
@@ -584,6 +606,12 @@ func (b *bot) sendCumulative(ctx context.Context, selector, totalLabel string) {
 	latest := agent_runtime.GetLatestReport()
 	for _, client := range list {
 		totals := notifier.TrafficTotals{}
+		if totalLabel == "累计" {
+			if vnstatTotals, ok := notifier.GetClientVnstatLatestTotals(client); ok {
+				_ = b.send(ctx, formatTrafficCard(client, vnstatTotals, totalLabel), nil)
+				continue
+			}
+		}
 		if report := latest[client.UUID]; report != nil {
 			totals.Up = report.Network.TotalUp
 			totals.Down = report.Network.TotalDown
@@ -641,7 +669,9 @@ func (b *bot) sendRemaining(ctx context.Context, selector string) {
 	reports := agent_runtime.GetLatestReport()
 	for _, client := range list {
 		totals := notifier.TrafficTotals{}
-		if report := reports[client.UUID]; report != nil {
+		if vnstatTotals, ok := notifier.GetClientVnstatCycleTotals(client, time.Now().In(b.location)); ok {
+			totals = vnstatTotals
+		} else if report := reports[client.UUID]; report != nil {
 			totals.Up = report.Network.TotalUp
 			totals.Down = report.Network.TotalDown
 		} else if latest, queryErr := notifier.GetLatestClientTrafficTotals(client.UUID); queryErr == nil {

@@ -42,6 +42,17 @@ type Client struct {
 	TrafficResetDay      int       `json:"traffic_reset_day" gorm:"type:int;default:0"`
 	TrafficResetTimezone string    `json:"traffic_reset_timezone" gorm:"type:varchar(64)"`
 	TrafficResetReported bool      `json:"traffic_reset_reported" gorm:"default:false"`
+	VnstatAvailable      bool      `json:"vnstat_available" gorm:"default:false"`
+	VnstatInterface      string    `json:"vnstat_interface" gorm:"type:varchar(64)"`
+	VnstatTotalUp        int64     `json:"vnstat_total_up" gorm:"type:bigint"`
+	VnstatTotalDown      int64     `json:"vnstat_total_down" gorm:"type:bigint"`
+	VnstatDailyJSON      string    `json:"vnstat_daily_json" gorm:"type:text"`
+	VnstatUpdatedAt      LocalTime `json:"vnstat_updated_at"`
+	VnstatBaselineUp     int64     `json:"vnstat_baseline_up" gorm:"type:bigint"`
+	VnstatBaselineDown   int64     `json:"vnstat_baseline_down" gorm:"type:bigint"`
+	VnstatBaselineVnUp   int64     `json:"vnstat_baseline_vn_up" gorm:"type:bigint"`
+	VnstatBaselineVnDown int64     `json:"vnstat_baseline_vn_down" gorm:"type:bigint"`
+	VnstatBaselineAt     LocalTime `json:"vnstat_baseline_at"`
 	CreatedAt            LocalTime `json:"created_at"`
 	UpdatedAt            LocalTime `json:"updated_at"`
 }

@@ -146,6 +146,9 @@ func sendTrafficReport(daily, weekly, monthly bool) {
 			log.Printf("Failed to compute traffic for client %s (%s): %v", n.Client, label, err)
 			continue
 		}
+		if vnstatTotals, ok := GetClientVnstatRangeTotals(c, start, end); ok {
+			totals = vnstatTotals
+		}
 		if compactTelegram {
 			name := c.Name
 			if strings.TrimSpace(name) == "" {

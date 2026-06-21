@@ -2,9 +2,11 @@ package clients
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/komari-monitor/komari/database/dbcore"
@@ -111,10 +113,19 @@ func SaveClientInfo(update map[string]interface{}) error {
 		if err := checkOptionalInt("TrafficResetDay", "traffic_reset_day", 31); err != nil {
 			return err
 		}
+		if err := checkOptionalInt("VnstatTotalUp", "vnstat_total_up", math.MaxInt64-1); err != nil {
+			return err
+		}
+		if err := checkOptionalInt("VnstatTotalDown", "vnstat_total_down", math.MaxInt64-1); err != nil {
+			return err
+		}
 		return nil
 	}
 
 	if err := verify(update); err != nil {
+		return err
+	}
+	if err := normalizeVnstatBasicInfo(db, clientUUID, update); err != nil {
 		return err
 	}
 
@@ -123,6 +134,143 @@ func SaveClientInfo(update map[string]interface{}) error {
 		return err
 	}
 	return nil
+}
+
+func normalizeVnstatBasicInfo(db *gorm.DB, clientUUID string, update map[string]interface{}) error {
+	if days, ok := update["vnstat_days"]; ok {
+		raw, err := json.Marshal(days)
+		if err != nil {
+			return fmt.Errorf("invalid vnStat daily data: %w", err)
+		}
+		if len(raw) > 256*1024 {
+			return fmt.Errorf("vnStat daily data is too large")
+		}
+		update["vnstat_daily_json"] = string(raw)
+		delete(update, "vnstat_days")
+	}
+
+	if iface, ok := update["vnstat_interface"].(string); ok {
+		iface = strings.TrimSpace(iface)
+		if len(iface) > 64 {
+			return fmt.Errorf("vnStat interface name is too long")
+		}
+		update["vnstat_interface"] = iface
+	}
+
+	available, _ := update["vnstat_available"].(bool)
+	if !available {
+		return nil
+	}
+
+	var existing models.Client
+	err := db.Select(
+		"uuid",
+		"vnstat_baseline_at",
+	).Where("uuid = ?", clientUUID).First(&existing).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	if !existing.VnstatBaselineAt.ToTime().IsZero() {
+		return nil
+	}
+
+	vnUp, okUp := int64FromUpdate(update["vnstat_total_up"])
+	vnDown, okDown := int64FromUpdate(update["vnstat_total_down"])
+	if !okUp || !okDown {
+		return nil
+	}
+	latest, err := latestTrafficTotalsForBaseline(db, clientUUID)
+	if err != nil {
+		return err
+	}
+	update["vnstat_baseline_up"] = latest.Up
+	update["vnstat_baseline_down"] = latest.Down
+	update["vnstat_baseline_vn_up"] = vnUp
+	update["vnstat_baseline_vn_down"] = vnDown
+	update["vnstat_baseline_at"] = models.FromTime(time.Now())
+	return nil
+}
+
+func int64FromUpdate(value interface{}) (int64, bool) {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed), true
+	case int8:
+		return int64(typed), true
+	case int16:
+		return int64(typed), true
+	case int32:
+		return int64(typed), true
+	case int64:
+		return typed, true
+	case uint:
+		if uint64(typed) > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(typed), true
+	case uint8:
+		return int64(typed), true
+	case uint16:
+		return int64(typed), true
+	case uint32:
+		return int64(typed), true
+	case uint64:
+		if typed > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(typed), true
+	case float64:
+		if typed < 0 || typed > math.MaxInt64 || math.Trunc(typed) != typed {
+			return 0, false
+		}
+		return int64(typed), true
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+}
+
+type trafficTotalsBaseline struct {
+	Up   int64
+	Down int64
+}
+
+func latestTrafficTotalsForBaseline(db *gorm.DB, clientUUID string) (trafficTotalsBaseline, error) {
+	latest, err := latestTrafficRecordForBaseline(db.Table("records"), clientUUID)
+	if err != nil {
+		return trafficTotalsBaseline{}, err
+	}
+	longTerm, err := latestTrafficRecordForBaseline(db.Table("records_long_term"), clientUUID)
+	if err != nil {
+		return trafficTotalsBaseline{}, err
+	}
+	if latest == nil || (longTerm != nil && longTerm.Time.ToTime().After(latest.Time.ToTime())) {
+		latest = longTerm
+	}
+	if latest == nil {
+		return trafficTotalsBaseline{}, nil
+	}
+	return trafficTotalsBaseline{Up: latest.NetTotalUp, Down: latest.NetTotalDown}, nil
+}
+
+func latestTrafficRecordForBaseline(query *gorm.DB, clientUUID string) (*models.Record, error) {
+	var record models.Record
+	err := query.Select("time, net_total_up, net_total_down").
+		Where("client = ?", clientUUID).
+		Order("time DESC").
+		First(&record).Error
+	if err == nil {
+		return &record, nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return nil, err
 }
 
 func EditClientName(clientUUID, clientName string) error {

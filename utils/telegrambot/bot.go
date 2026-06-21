@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"html"
 	"log"
-	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -518,10 +517,12 @@ func (b *bot) sendNodeCard(ctx context.Context, client models.Client) {
 func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 	now := time.Now().In(b.location)
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, b.location)
+	totalLabel := "今日"
 	end := now
 	if kind == "yesterday" {
 		end = start.Add(-time.Nanosecond)
 		start = start.AddDate(0, 0, -1)
+		totalLabel = "昨日"
 	}
 	list, err := selectClients(selector)
 	if err != nil {
@@ -534,16 +535,16 @@ func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 			_ = b.send(ctx, formatTrafficErrorCard(client), nil)
 			continue
 		}
-		_ = b.send(ctx, formatTrafficCard(client, totals), nil)
+		_ = b.send(ctx, formatTrafficCard(client, totals, totalLabel), nil)
 	}
 }
 
 func (b *bot) sendCycle(ctx context.Context, selector string) {
-	b.sendCumulative(ctx, selector)
+	b.sendCumulative(ctx, selector, "周期")
 }
 
 func (b *bot) sendTotal(ctx context.Context, selector string) {
-	b.sendCumulative(ctx, selector)
+	b.sendCumulative(ctx, selector, "累计")
 }
 
 func (b *bot) sendAllTotal(ctx context.Context) {
@@ -569,7 +570,7 @@ func (b *bot) sendAllTotal(ctx context.Context) {
 	_ = b.send(ctx, formatAllTrafficCard(len(list), up, down), nil)
 }
 
-func (b *bot) sendCumulative(ctx context.Context, selector string) {
+func (b *bot) sendCumulative(ctx context.Context, selector, totalLabel string) {
 	list, err := selectClients(selector)
 	if err != nil {
 		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
@@ -588,7 +589,7 @@ func (b *bot) sendCumulative(ctx context.Context, selector string) {
 				continue
 			}
 		}
-		_ = b.send(ctx, formatTrafficCard(client, totals), nil)
+		_ = b.send(ctx, formatTrafficCard(client, totals, totalLabel), nil)
 	}
 }
 
@@ -599,39 +600,31 @@ func (b *bot) sendReset(ctx context.Context, selector string) {
 		return
 	}
 	now := time.Now().In(b.location)
-	lines := []string{"<b>🗓 流量重置日</b>\n━━━━━━━━━━━━━━"}
 	for _, client := range list {
-		name := html.EscapeString(displayName(client))
+		resetText := "暂未检测到"
 		if client.TrafficResetReported {
-			zone := strings.TrimSpace(client.TrafficResetTimezone)
-			if zone == "" {
-				zone = "Local"
-			}
 			if client.TrafficResetDay == 0 {
-				lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　⏸ 探针未启用每月流量重置\n　🌐 时区　<code>%s</code>", name, html.EscapeString(zone)))
+				resetText = "未启用"
 			} else {
 				note := ""
 				if client.TrafficResetDay > 28 {
-					note = "（短月顺延至下月 1 日）"
+					note = "（短月顺延）"
 				}
-				lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　✅ 探针精确上报\n　📆 每月 <b>%d 日</b>%s\n　🌐 时区　<code>%s</code>", name, client.TrafficResetDay, note, html.EscapeString(zone)))
+				resetText = fmt.Sprintf("每月 %d 日%s", client.TrafficResetDay, note)
 			}
+			_ = b.send(ctx, formatResetCard(client, resetText), nil)
 			continue
 		}
 		resetAt, found, err := notifier.GetLatestClientTrafficReset(client.UUID, now)
 		if err != nil {
-			lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　⚠️ 查询失败", name))
+			_ = b.send(ctx, formatResetCard(client, "查询失败"), nil)
 			continue
 		}
-		if !found {
-			lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　⏳ 近 62 天暂未检测到重置", name))
-			continue
+		if found {
+			resetText = fmt.Sprintf("推测每月 %d 日", resetAt.In(b.location).Day())
 		}
-		local := resetAt.In(b.location)
-		lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　📆 推测每月 <b>%d 日</b>\n　🕒 最近重置 %s", name, local.Day(), local.Format("2006-01-02 15:04")))
+		_ = b.send(ctx, formatResetCard(client, resetText), nil)
 	}
-	lines = append(lines, "\n━━━━━━━━━━━━━━\n<i>新版探针显示精确配置；旧版探针降级为历史归零推断。</i>")
-	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
 }
 
 func (b *bot) sendRemaining(ctx context.Context, selector string) {
@@ -641,13 +634,7 @@ func (b *bot) sendRemaining(ctx context.Context, selector string) {
 		return
 	}
 	reports := agent_runtime.GetLatestReport()
-	lines := []string{"<b>📦 剩余总流量</b>\n━━━━━━━━━━━━━━"}
 	for _, client := range list {
-		name := html.EscapeString(displayName(client))
-		if client.TrafficLimit <= 0 {
-			lines = append(lines, fmt.Sprintf("\n<b>🖥 %s</b>\n　⚙️ 面板尚未设置流量上限", name))
-			continue
-		}
 		totals := notifier.TrafficTotals{}
 		if report := reports[client.UUID]; report != nil {
 			totals.Up = report.Network.TotalUp
@@ -656,38 +643,15 @@ func (b *bot) sendRemaining(ctx context.Context, selector string) {
 			totals = latest
 		}
 		used := notifier.ComputeUsedByType(strings.ToLower(client.TrafficLimitType), totals.Up, totals.Down)
+		if client.TrafficLimit <= 0 {
+			_ = b.send(ctx, formatRemainingCard(client, used, 0, 0, true), nil)
+			continue
+		}
 		remaining := client.TrafficLimit - used
 		if remaining < 0 {
 			remaining = 0
 		}
-		percent := float64(used) / float64(client.TrafficLimit) * 100
-		if percent > 100 {
-			percent = 100
-		}
-		lines = append(lines, fmt.Sprintf("\n<b>🖥 %s</b>\n　%s　%.1f%%\n　✅ 剩余　<b>%s</b>\n　📈 已用　%s / %s\n　🧮 口径　<code>%s</code>", name, progressBar(percent), percent, humanBytes(remaining), humanBytes(used), humanBytes(client.TrafficLimit), html.EscapeString(normalizeTrafficLimitType(client.TrafficLimitType))))
-	}
-	lines = append(lines, "\n━━━━━━━━━━━━━━\n<i>流量上限与统计口径来自面板的节点设置。</i>")
-	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
-}
-
-func progressBar(percent float64) string {
-	filled := int(math.Round(percent / 10))
-	if filled < 0 {
-		filled = 0
-	}
-	if filled > 10 {
-		filled = 10
-	}
-	return strings.Repeat("▰", filled) + strings.Repeat("▱", 10-filled)
-}
-
-func normalizeTrafficLimitType(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	switch value {
-	case "up", "down", "sum", "min", "max":
-		return value
-	default:
-		return "max"
+		_ = b.send(ctx, formatRemainingCard(client, used, remaining, client.TrafficLimit, false), nil)
 	}
 }
 
@@ -790,8 +754,8 @@ func isOnline(uuid string) bool {
 	return false
 }
 
-func formatTrafficCard(client models.Client, totals notifier.TrafficTotals) string {
-	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n🔼 上传: %s\n🔽 下载: %s\n📊 总计: <b>%s</b>", html.EscapeString(displayName(client)), humanBytes(totals.Up), humanBytes(totals.Down), humanBytes(totals.Up+totals.Down))
+func formatTrafficCard(client models.Client, totals notifier.TrafficTotals, totalLabel string) string {
+	return notifier.FormatCompactTrafficCard(displayName(client), totalLabel, totals)
 }
 
 func formatTrafficErrorCard(client models.Client) string {
@@ -800,6 +764,20 @@ func formatTrafficErrorCard(client models.Client) string {
 
 func formatAllTrafficCard(count int, up, down int64) string {
 	return fmt.Sprintf("🖥️ 机器: <b>全部机器（%d 台）</b>\n🔼 上传: %s\n🔽 下载: %s\n📊 总计: <b>%s</b>", count, humanBytes(up), humanBytes(down), humanBytes(up+down))
+}
+
+func formatRemainingCard(client models.Client, used, remaining, limit int64, unlimited bool) string {
+	remainingText := humanBytes(remaining)
+	limitText := humanBytes(limit)
+	if unlimited {
+		remainingText = "∞ 无限"
+		limitText = "∞ 无限"
+	}
+	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n📈 已用: %s\n📦 剩余: <b>%s</b>\n📊 总量: %s", html.EscapeString(displayName(client)), humanBytes(used), remainingText, limitText)
+}
+
+func formatResetCard(client models.Client, resetText string) string {
+	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n🔄 重置: %s", html.EscapeString(displayName(client)), html.EscapeString(resetText))
 }
 
 func humanBytes(value int64) string {

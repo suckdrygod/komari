@@ -2,6 +2,7 @@ package notifier
 
 import (
 	"fmt"
+	"html"
 	"log/slog"
 	"math"
 	"strings"
@@ -92,6 +93,16 @@ func CheckTraffic() {
 
 		if curStep > lastStep { // 只在进入新步进时提醒一次
 			trafficCache.SetDefault(key, curStep)
+			method, _ := config.GetAs[string](config.NotificationMethodKey, "none")
+			if method == "telegram" {
+				name := c.Name
+				if strings.TrimSpace(name) == "" {
+					name = c.UUID
+				}
+				msg := fmt.Sprintf("🖥️ 机器: <b>%s</b>\n🔼 上传: %s\n🔽 下载: %s\n📊 已用: <b>%s</b> / %s（%d%%）", html.EscapeString(name), humanBytes(r.Network.TotalUp), humanBytes(r.Network.TotalDown), humanBytes(used), humanBytes(c.TrafficLimit), curStep)
+				_ = messageSender.SendTextMessage(msg, "")
+				continue
+			}
 
 			msg := fmt.Sprintf("used %d%% (%s / %s), type=%s", curStep, humanBytes(used), humanBytes(c.TrafficLimit), strings.ToLower(c.TrafficLimitType))
 			// 发送通知（内部会检查 NotificationEnabled）

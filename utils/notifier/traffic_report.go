@@ -3,6 +3,7 @@ package notifier
 import (
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"sort"
 	"strings"
@@ -57,7 +58,7 @@ func sendTrafficReport(daily, weekly, monthly bool) {
 
 	// 计算时间范围
 	var start, end time.Time
-	var eventType, label, suffix string
+	var eventType, label, suffix, compactLabel string
 
 	switch {
 	case daily:
@@ -67,6 +68,7 @@ func sendTrafficReport(daily, weekly, monthly bool) {
 		eventType = messageevent.DReport
 		label = "daily"
 		suffix = "昨日流量"
+		compactLabel = "昨日"
 	case weekly:
 		weekday := int(now.Weekday())
 		if weekday == 0 {
@@ -79,6 +81,7 @@ func sendTrafficReport(daily, weekly, monthly bool) {
 		eventType = messageevent.WReport
 		label = "weekly"
 		suffix = "上周流量"
+		compactLabel = "上周"
 	case monthly:
 		firstOfThisMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 		firstOfLastMonth := firstOfThisMonth.AddDate(0, -1, 0)
@@ -88,6 +91,7 @@ func sendTrafficReport(daily, weekly, monthly bool) {
 		eventType = messageevent.MReport
 		label = "monthly"
 		suffix = "上个月流量"
+		compactLabel = "上月"
 	default:
 		return
 	}
@@ -125,7 +129,11 @@ func sendTrafficReport(daily, weekly, monthly bool) {
 		clientMap[c.UUID] = c
 	}
 
-	// 为每个服务器统计流量并拼接消息
+	method, _ := config.GetAs[string](config.NotificationMethodKey, "none")
+	compactTelegram := method == "telegram"
+
+	// 为每个服务器统计流量并拼接消息。Telegram 使用逐机器紧凑卡片；
+	// 其它通知提供方保留原有聚合事件格式。
 	var lines []string
 	eventClients := make([]models.Client, 0, len(notifications))
 	for _, n := range notifications {
@@ -134,14 +142,28 @@ func sendTrafficReport(daily, weekly, monthly bool) {
 			continue
 		}
 
-		used, err := getClientTrafficInRange(n.Client, c.TrafficLimitType, start, end)
+		totals, err := getClientTrafficTotalsInRangeWithDB(db, n.Client, start, end)
 		if err != nil {
 			log.Printf("Failed to compute traffic for client %s (%s): %v", n.Client, label, err)
 			continue
 		}
+		if compactTelegram {
+			name := c.Name
+			if strings.TrimSpace(name) == "" {
+				name = c.UUID
+			}
+			if err := messageSender.SendTextMessage(FormatCompactTrafficCard(name, compactLabel, totals), ""); err != nil {
+				log.Printf("Failed to send compact %s traffic report for client %s: %v", label, n.Client, err)
+			}
+			continue
+		}
 
+		used := ComputeUsedByType(strings.ToLower(c.TrafficLimitType), totals.Up, totals.Down)
 		lines = append(lines, fmt.Sprintf("%s%s：%s", c.Name, suffix, humanBytes(used)))
 		eventClients = append(eventClients, c)
+	}
+	if compactTelegram {
+		return
 	}
 
 	if len(lines) == 0 {
@@ -182,6 +204,12 @@ func getClientTrafficInRange(clientUUID string, trafficType string, start, end t
 type TrafficTotals struct {
 	Up   int64
 	Down int64
+}
+
+// FormatCompactTrafficCard returns the shared Telegram-native traffic layout
+// used by both scheduled reports and interactive bot commands.
+func FormatCompactTrafficCard(name, totalLabel string, totals TrafficTotals) string {
+	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n🔼 上传: %s\n🔽 下载: %s\n📊 %s: <b>%s</b>", html.EscapeString(name), humanBytes(totals.Up), humanBytes(totals.Down), html.EscapeString(totalLabel), humanBytes(totals.Up+totals.Down))
 }
 
 // GetClientTrafficTotalsInRange returns upload/download deltas from both raw

@@ -12,7 +12,6 @@ import (
 	"github.com/komari-monitor/komari/database/clients"
 	"github.com/komari-monitor/komari/database/models"
 	messageevent "github.com/komari-monitor/komari/database/models/messageEvent"
-	"github.com/komari-monitor/komari/pkg/config"
 	v2 "github.com/komari-monitor/komari/protocol/v2"
 	"github.com/komari-monitor/komari/utils/messageSender"
 	cache "github.com/patrickmn/go-cache"
@@ -98,13 +97,7 @@ func allowSSHLoginEvent(clientUUID string, now time.Time) bool {
 }
 
 func sendSSHLoginNotifications(event models.EventMessage) {
-	if err := messageSender.SendEvent(event); err != nil {
-		log.Printf("Failed to send SSH login notification through active provider: %v", err)
-	}
-	method, _ := config.GetAs[string](config.NotificationMethodKey, "none")
-	if method != "email" {
-		if err := messageSender.SendEventWithProvider("email", event); err != nil && !strings.Contains(err.Error(), "not fully configured") {
-			log.Printf("Failed to send SSH login email copy: %v", err)
-		}
+	if err := messageSender.SendEventAndEmailCopy(event); err != nil {
+		log.Printf("Failed to send SSH login notification: %v", err)
 	}
 }

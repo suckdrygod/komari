@@ -2,13 +2,31 @@ package messageSender
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/komari-monitor/komari/database"
 	"github.com/komari-monitor/komari/database/models"
 	"github.com/komari-monitor/komari/pkg/config"
 	"github.com/komari-monitor/komari/utils/messageSender/factory"
 )
+
+// SendEventAndEmailCopy sends through the active provider and, when the active
+// provider is not email, also sends through a separately configured Email
+// provider. An unconfigured optional Email provider is silently skipped.
+func SendEventAndEmailCopy(event models.EventMessage) error {
+	primaryErr := SendEvent(event)
+	method, _ := config.GetAs[string](config.NotificationMethodKey, "none")
+	if method == "email" {
+		return primaryErr
+	}
+	emailErr := SendEventWithProvider("email", event)
+	if emailErr != nil && (strings.Contains(emailErr.Error(), "not fully configured") || strings.Contains(emailErr.Error(), "record not found")) {
+		emailErr = nil
+	}
+	return errors.Join(primaryErr, emailErr)
+}
 
 // SendEventWithProvider sends one event through a named, already-configured
 // provider without replacing the panel's active notification provider. It is

@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/komari-monitor/komari/database/models"
 	telegramprovider "github.com/komari-monitor/komari/utils/messageSender/telegram"
+	"github.com/komari-monitor/komari/utils/notifier"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -118,8 +120,14 @@ func TestHumanBytes(t *testing.T) {
 	assert.Equal(t, "1.50 GB", humanBytes(3*1024*1024*1024/2))
 }
 
-func TestProgressBarAndTrafficLimitType(t *testing.T) {
-	assert.Equal(t, "▰▰▰▰▰▱▱▱▱▱", progressBar(50))
-	assert.Equal(t, "max", normalizeTrafficLimitType(""))
-	assert.Equal(t, "sum", normalizeTrafficLimitType("SUM"))
+func TestCompactTrafficCards(t *testing.T) {
+	client := models.Client{Name: "VPS <01>"}
+	totals := notifier.TrafficTotals{Up: 12 * 1024 * 1024, Down: 608 * 1024 * 1024}
+
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n🔼 上传: 12.00 MB\n🔽 下载: 608.00 MB\n📊 今日: <b>620.00 MB</b>", formatTrafficCard(client, totals, "今日"))
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n⚠️ 流量统计失败", formatTrafficErrorCard(client))
+	assert.Equal(t, "🖥️ 机器: <b>全部机器（2 台）</b>\n🔼 上传: 1.00 KB\n🔽 下载: 2.00 KB\n📊 总计: <b>3.00 KB</b>", formatAllTrafficCard(2, 1024, 2048))
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n📈 已用: 600.00 MB\n📦 剩余: <b>400.00 MB</b>\n📊 总量: 1000.00 MB", formatRemainingCard(client, 600*1024*1024, 400*1024*1024, 1000*1024*1024, false))
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n📈 已用: 600.00 MB\n📦 剩余: <b>∞ 无限</b>\n📊 总量: ∞ 无限", formatRemainingCard(client, 600*1024*1024, 0, 0, true))
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n🔄 重置: 每月 1 日", formatResetCard(client, "每月 1 日"))
 }

@@ -209,3 +209,12 @@ func TestGetClientTrafficInRangePrefersRawSlotOverZeroLongTermSlot(t *testing.T)
 	assert.NoError(t, err)
 	assert.Equal(t, int64(110), used)
 }
+
+func TestFormatCompactTrafficCard(t *testing.T) {
+	message := FormatCompactTrafficCard("VPS <01>", "上周", TrafficTotals{
+		Up:   12 * 1024 * 1024,
+		Down: 608 * 1024 * 1024,
+	})
+
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n🔼 上传: 12.00 MB\n🔽 下载: 608.00 MB\n📊 上周: <b>620.00 MB</b>", message)
+}

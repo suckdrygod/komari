@@ -1,0 +1,48 @@
+# Telegram 流量菜单
+
+Komari 面板可以使用一个 Telegram Bot 统一查询所有节点。Bot 只运行在面板端，Agent 不保存 Bot Token，也不接收 Telegram 命令。
+
+## 推荐部署
+
+1. 在 BotFather 创建一个专用于 Komari 的 Bot。
+2. 在 Komari 的通知设置中选择 `telegram`，填写 `bot_token` 和 `chat_id`。
+3. 开启 `command_menu_enabled`。
+4. 私聊使用时，`chat_id` 应为你自己的 Telegram 数字用户 ID；此时 `command_allowed_users` 可以留空。
+5. 群组使用时，必须在 `command_allowed_users` 填写允许操作的数字用户 ID，多个 ID 使用英文逗号分隔。
+6. 中国时区使用 `command_timezone = Asia/Shanghai`。
+
+如果填写了 `message_thread_id`，Bot 只接受该话题中的命令，并把回复发回同一话题。
+
+> 一个 Bot Token 只能有一个 `getUpdates` 长轮询消费者。不要让其他程序同时轮询这个 Komari Bot，也不要给它配置 webhook。
+
+## 菜单命令
+
+| 命令 | 用途 |
+| --- | --- |
+| `/nodes` | 显示节点按钮和在线状态 |
+| `/today [节点]` | 今日上传、下载和总流量 |
+| `/yesterday [节点]` | 昨日上传、下载和总流量 |
+| `/cycle [节点]` | Agent 当前 `month-rotate` 周期累计流量 |
+| `/status [节点]` | 在线状态和运行时间 |
+| `/report [节点]` | 立即发送今日流量与周期累计 |
+| `/help` | 使用说明 |
+
+节点参数可以使用完整名称或 UUID；省略节点时返回所有节点（最多 30 个）。`/nodes` 提供按钮操作，不需要手工输入节点名称。
+
+## 每日自动流量报告
+
+Komari 原有的流量报告任务会从面板数据库的精确流量增量生成日报、周报和月报。要发送每日 Telegram 汇总：
+
+1. 开启全局通知并选择 Telegram 提供方。
+2. 在流量报告设置中为目标节点开启 `enable` 和 `daily`。
+3. 保持监控记录功能开启。
+4. 将面板进程或容器时区设为 `Asia/Shanghai`，日报会按面板时区在午夜生成。
+
+命令菜单的 `command_timezone` 只控制 `/today` 和 `/yesterday` 的日期边界；自动日报仍使用面板进程时区。
+
+## 安全边界
+
+- 所有命令同时校验固定 `chat_id` 和允许的用户 ID。
+- 群组未配置用户白名单时，命令全部拒绝。
+- Bot 只查询面板已有监控数据，不向 Agent 派发终端、命令或文件操作。
+- 面板重启时会丢弃停机期间积压的旧命令，避免意外执行过期操作。

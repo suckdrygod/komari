@@ -14,7 +14,6 @@ import (
 	messageevent "github.com/komari-monitor/komari/database/models/messageEvent"
 	"github.com/komari-monitor/komari/pkg/config"
 	"github.com/komari-monitor/komari/pkg/corn"
-	"github.com/komari-monitor/komari/utils"
 	"github.com/komari-monitor/komari/utils/messageSender"
 	"gorm.io/gorm"
 )
@@ -414,25 +413,63 @@ func latestTrafficDeltaRecordBefore(query *gorm.DB, clientUUID string, before ti
 func sumTrafficDeltas(records []trafficDeltaRecord, previous *trafficDeltaRecord) (int64, int64) {
 	var totalUp int64
 	var totalDown int64
+	var previousUp int64
+	var previousDown int64
+	hasPreviousUp := previous != nil
+	hasPreviousDown := previous != nil
+	if previous != nil {
+		previousUp = previous.NetTotalUp
+		previousDown = previous.NetTotalDown
+	}
+	var rollbackBaseUp int64
+	var rollbackBaseDown int64
+	hasRollbackBaseUp := false
+	hasRollbackBaseDown := false
 
 	for i := range records {
-		up := records[i].TrafficUp
-		down := records[i].TrafficDown
-		if previous != nil {
-			up = trafficDeltaOrFallback(up, records[i].NetTotalUp, previous.NetTotalUp)
-			down = trafficDeltaOrFallback(down, records[i].NetTotalDown, previous.NetTotalDown)
-		}
+		var up int64
+		var down int64
+		up, previousUp, rollbackBaseUp, hasPreviousUp, hasRollbackBaseUp = trafficDeltaOrFallback(
+			records[i].TrafficUp,
+			records[i].NetTotalUp,
+			previousUp,
+			hasPreviousUp,
+			rollbackBaseUp,
+			hasRollbackBaseUp,
+		)
+		down, previousDown, rollbackBaseDown, hasPreviousDown, hasRollbackBaseDown = trafficDeltaOrFallback(
+			records[i].TrafficDown,
+			records[i].NetTotalDown,
+			previousDown,
+			hasPreviousDown,
+			rollbackBaseDown,
+			hasRollbackBaseDown,
+		)
 		totalUp += up
 		totalDown += down
-		previous = &records[i]
 	}
 
 	return totalUp, totalDown
 }
 
-func trafficDeltaOrFallback(storedDelta, currentTotal, previousTotal int64) int64 {
+func trafficDeltaOrFallback(storedDelta, currentTotal, previousTotal int64, hasPrevious bool, rollbackBase int64, hasRollbackBase bool) (int64, int64, int64, bool, bool) {
 	if storedDelta > 0 {
-		return storedDelta
+		return storedDelta, currentTotal, 0, true, false
 	}
-	return utils.ComputeTrafficDelta(currentTotal, previousTotal)
+	if !hasPrevious {
+		return 0, currentTotal, rollbackBase, true, hasRollbackBase
+	}
+	if hasRollbackBase {
+		if currentTotal >= rollbackBase {
+			return currentTotal - rollbackBase, currentTotal, 0, true, false
+		}
+		if currentTotal >= previousTotal {
+			return currentTotal - previousTotal, currentTotal, rollbackBase, true, true
+		}
+		return 0, currentTotal, rollbackBase, true, true
+	}
+	if currentTotal < previousTotal {
+		return 0, currentTotal, previousTotal, true, true
+	}
+	return currentTotal - previousTotal, currentTotal, 0, true, false
 }

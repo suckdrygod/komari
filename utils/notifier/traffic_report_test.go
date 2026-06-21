@@ -140,7 +140,76 @@ func TestGetClientTrafficInRangeFallsBackForPersistedZeroDeltas(t *testing.T) {
 
 	used, err := getClientTrafficInRangeWithDB(db, clientUUID, "sum", start, start.Add(20*time.Minute))
 	assert.NoError(t, err)
-	assert.Equal(t, int64(235), used)
+	assert.Equal(t, int64(195), used)
+}
+
+func TestGetClientTrafficInRangeIgnoresZeroDeltaCounterRollbacks(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	assert.NoError(t, err)
+	assert.NoError(t, db.AutoMigrate(&models.Record{}))
+	assert.NoError(t, db.Table("records_long_term").AutoMigrate(&models.Record{}))
+
+	clientUUID := "client-interleaved-counters"
+	start := time.Date(2026, 6, 6, 0, 0, 0, 0, time.UTC)
+	records := []models.Record{
+		{Client: clientUUID, Time: models.FromTime(start.Add(-1 * time.Minute)), NetTotalUp: 1000, NetTotalDown: 2000},
+		{Client: clientUUID, Time: models.FromTime(start.Add(0 * time.Minute)), NetTotalUp: 1030, NetTotalDown: 2050},
+		{Client: clientUUID, Time: models.FromTime(start.Add(1 * time.Minute)), NetTotalUp: 650, NetTotalDown: 900},
+		{Client: clientUUID, Time: models.FromTime(start.Add(2 * time.Minute)), NetTotalUp: 1040, NetTotalDown: 2060},
+		{Client: clientUUID, Time: models.FromTime(start.Add(3 * time.Minute)), NetTotalUp: 660, NetTotalDown: 910},
+	}
+	for _, record := range records {
+		assert.NoError(t, db.Create(&record).Error)
+	}
+
+	used, err := getClientTrafficInRangeWithDB(db, clientUUID, "sum", start, start.Add(5*time.Minute))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(100), used)
+}
+
+func TestGetClientTrafficInRangeKeepsStoredResetDeltas(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	assert.NoError(t, err)
+	assert.NoError(t, db.AutoMigrate(&models.Record{}))
+	assert.NoError(t, db.Table("records_long_term").AutoMigrate(&models.Record{}))
+
+	clientUUID := "client-legitimate-reset"
+	start := time.Date(2026, 6, 7, 0, 0, 0, 0, time.UTC)
+	records := []models.Record{
+		{Client: clientUUID, Time: models.FromTime(start.Add(-1 * time.Minute)), NetTotalUp: 1000, NetTotalDown: 2000},
+		{Client: clientUUID, Time: models.FromTime(start.Add(0 * time.Minute)), NetTotalUp: 20, NetTotalDown: 30, TrafficUp: 20, TrafficDown: 30},
+		{Client: clientUUID, Time: models.FromTime(start.Add(1 * time.Minute)), NetTotalUp: 35, NetTotalDown: 55, TrafficUp: 15, TrafficDown: 25},
+	}
+	for _, record := range records {
+		assert.NoError(t, db.Create(&record).Error)
+	}
+
+	used, err := getClientTrafficInRangeWithDB(db, clientUUID, "sum", start, start.Add(5*time.Minute))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(90), used)
+}
+
+func TestGetClientTrafficInRangeCountsOnlyAboveRollbackHighWater(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	assert.NoError(t, err)
+	assert.NoError(t, db.AutoMigrate(&models.Record{}))
+	assert.NoError(t, db.Table("records_long_term").AutoMigrate(&models.Record{}))
+
+	clientUUID := "client-returns-to-high-water"
+	start := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
+	records := []models.Record{
+		{Client: clientUUID, Time: models.FromTime(start.Add(-1 * time.Minute)), NetTotalUp: 1000, NetTotalDown: 2000},
+		{Client: clientUUID, Time: models.FromTime(start.Add(0 * time.Minute)), NetTotalUp: 650, NetTotalDown: 900},
+		{Client: clientUUID, Time: models.FromTime(start.Add(1 * time.Minute)), NetTotalUp: 700, NetTotalDown: 950},
+		{Client: clientUUID, Time: models.FromTime(start.Add(2 * time.Minute)), NetTotalUp: 1030, NetTotalDown: 2040},
+	}
+	for _, record := range records {
+		assert.NoError(t, db.Create(&record).Error)
+	}
+
+	used, err := getClientTrafficInRangeWithDB(db, clientUUID, "sum", start, start.Add(5*time.Minute))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(170), used)
 }
 
 func TestGetClientTrafficInRangeFallsBackForLongTermZeroDeltas(t *testing.T) {
@@ -207,7 +276,7 @@ func TestGetClientTrafficInRangePrefersRawSlotOverZeroLongTermSlot(t *testing.T)
 
 	used, err := getClientTrafficInRangeWithDB(db, clientUUID, "sum", start, slot.Add(15*time.Minute))
 	assert.NoError(t, err)
-	assert.Equal(t, int64(110), used)
+	assert.Equal(t, int64(80), used)
 }
 
 func TestFormatCompactTrafficCard(t *testing.T) {

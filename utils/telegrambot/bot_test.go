@@ -131,3 +131,19 @@ func TestCompactTrafficCards(t *testing.T) {
 	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n📈 已用: 600.00 MB\n📦 剩余: <b>∞ 无限</b>\n📊 总量: ∞ 无限", formatRemainingCard(client, 600*1024*1024, 0, 0, true))
 	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n🔄 重置: 每月 1 日", formatResetCard(client, "每月 1 日"))
 }
+
+func TestCapTrafficTotals(t *testing.T) {
+	capped := capTrafficTotals(
+		notifier.TrafficTotals{Up: 275 * 1024, Down: 329 * 1024},
+		notifier.TrafficTotals{Up: 9 * 1024, Down: 12 * 1024},
+	)
+
+	assert.Equal(t, notifier.TrafficTotals{Up: 9 * 1024, Down: 12 * 1024}, capped)
+
+	unchanged := capTrafficTotals(
+		notifier.TrafficTotals{Up: 5 * 1024, Down: 6 * 1024},
+		notifier.TrafficTotals{Up: 9 * 1024, Down: 12 * 1024},
+	)
+
+	assert.Equal(t, notifier.TrafficTotals{Up: 5 * 1024, Down: 6 * 1024}, unchanged)
+}

@@ -535,6 +535,11 @@ func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 			_ = b.send(ctx, formatTrafficErrorCard(client), nil)
 			continue
 		}
+		if kind == "today" {
+			if latest, latestErr := notifier.GetLatestClientTrafficTotals(client.UUID); latestErr == nil {
+				totals = capTrafficTotals(totals, latest)
+			}
+		}
 		_ = b.send(ctx, formatTrafficCard(client, totals, totalLabel), nil)
 	}
 }
@@ -756,6 +761,16 @@ func isOnline(uuid string) bool {
 
 func formatTrafficCard(client models.Client, totals notifier.TrafficTotals, totalLabel string) string {
 	return notifier.FormatCompactTrafficCard(displayName(client), totalLabel, totals)
+}
+
+func capTrafficTotals(totals, limit notifier.TrafficTotals) notifier.TrafficTotals {
+	if limit.Up >= 0 && totals.Up > limit.Up {
+		totals.Up = limit.Up
+	}
+	if limit.Down >= 0 && totals.Down > limit.Down {
+		totals.Down = limit.Down
+	}
+	return totals
 }
 
 func formatTrafficErrorCard(client models.Client) string {

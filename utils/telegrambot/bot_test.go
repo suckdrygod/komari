@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/komari-monitor/komari/database/models"
 	telegramprovider "github.com/komari-monitor/komari/utils/messageSender/telegram"
+	"github.com/komari-monitor/komari/utils/notifier"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -116,6 +118,15 @@ func TestHumanBytes(t *testing.T) {
 	assert.Equal(t, "0 B", humanBytes(-1))
 	assert.Equal(t, "1.00 KB", humanBytes(1024))
 	assert.Equal(t, "1.50 GB", humanBytes(3*1024*1024*1024/2))
+}
+
+func TestCompactTrafficCards(t *testing.T) {
+	client := models.Client{Name: "VPS <01>"}
+	totals := notifier.TrafficTotals{Up: 12 * 1024 * 1024, Down: 608 * 1024 * 1024}
+
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n🔼 上传: 12.00 MB\n🔽 下载: 608.00 MB\n📊 总计: <b>620.00 MB</b>", formatTrafficCard(client, totals))
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n⚠️ 流量统计失败", formatTrafficErrorCard(client))
+	assert.Equal(t, "🖥️ 机器: <b>全部机器（2 台）</b>\n🔼 上传: 1.00 KB\n🔽 下载: 2.00 KB\n📊 总计: <b>3.00 KB</b>", formatAllTrafficCard(2, 1024, 2048))
 }
 
 func TestProgressBarAndTrafficLimitType(t *testing.T) {

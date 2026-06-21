@@ -518,37 +518,32 @@ func (b *bot) sendNodeCard(ctx context.Context, client models.Client) {
 func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 	now := time.Now().In(b.location)
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, b.location)
-	label := "今日流量"
 	end := now
 	if kind == "yesterday" {
 		end = start.Add(-time.Nanosecond)
 		start = start.AddDate(0, 0, -1)
-		label = "昨日流量"
 	}
 	list, err := selectClients(selector)
 	if err != nil {
 		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
-	lines := []string{fmt.Sprintf("<b>📊 %s</b>\n━━━━━━━━━━━━━━", label)}
 	for _, client := range list {
 		totals, err := notifier.GetClientTrafficTotalsInRange(client.UUID, start, end)
 		if err != nil {
-			lines = append(lines, fmt.Sprintf("%s：统计失败", html.EscapeString(displayName(client))))
+			_ = b.send(ctx, formatTrafficErrorCard(client), nil)
 			continue
 		}
-		lines = append(lines, formatTrafficLine(client, totals))
+		_ = b.send(ctx, formatTrafficCard(client, totals), nil)
 	}
-	lines = append(lines, fmt.Sprintf("\n━━━━━━━━━━━━━━\n🕒 时区　<code>%s</code>", html.EscapeString(b.commandTimezone)))
-	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
 }
 
 func (b *bot) sendCycle(ctx context.Context, selector string) {
-	b.sendCumulative(ctx, selector, "🔄 当前周期累计流量")
+	b.sendCumulative(ctx, selector)
 }
 
 func (b *bot) sendTotal(ctx context.Context, selector string) {
-	b.sendCumulative(ctx, selector, "📊 累计总流量")
+	b.sendCumulative(ctx, selector)
 }
 
 func (b *bot) sendAllTotal(ctx context.Context) {
@@ -571,18 +566,16 @@ func (b *bot) sendAllTotal(ctx context.Context) {
 			down += totals.Down
 		}
 	}
-	text := fmt.Sprintf("<b>🌐 所有机器累计总流量</b>\n━━━━━━━━━━━━━━\n　🖥 机器数量　<b>%d</b>\n　⬆️ 上传合计　%s\n　⬇️ 下载合计　%s\n　📦 流量总计　<b>%s</b>\n━━━━━━━━━━━━━━\n<i>各机器重置日可能不同，此处汇总每台机器各自当前周期的累计值。</i>", len(list), humanBytes(up), humanBytes(down), humanBytes(up+down))
-	_ = b.send(ctx, text, nil)
+	_ = b.send(ctx, formatAllTrafficCard(len(list), up, down), nil)
 }
 
-func (b *bot) sendCumulative(ctx context.Context, selector, title string) {
+func (b *bot) sendCumulative(ctx context.Context, selector string) {
 	list, err := selectClients(selector)
 	if err != nil {
 		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
 	latest := agent_runtime.GetLatestReport()
-	lines := []string{fmt.Sprintf("<b>%s</b>\n━━━━━━━━━━━━━━", html.EscapeString(title))}
 	for _, client := range list {
 		totals := notifier.TrafficTotals{}
 		if report := latest[client.UUID]; report != nil {
@@ -591,14 +584,12 @@ func (b *bot) sendCumulative(ctx context.Context, selector, title string) {
 		} else {
 			totals, err = notifier.GetLatestClientTrafficTotals(client.UUID)
 			if err != nil {
-				lines = append(lines, fmt.Sprintf("%s：统计失败", html.EscapeString(displayName(client))))
+				_ = b.send(ctx, formatTrafficErrorCard(client), nil)
 				continue
 			}
 		}
-		lines = append(lines, formatTrafficLine(client, totals))
+		_ = b.send(ctx, formatTrafficCard(client, totals), nil)
 	}
-	lines = append(lines, "\n━━━━━━━━━━━━━━\n💡 周期边界由探针的 <code>month-rotate</code> 设置决定。")
-	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
 }
 
 func (b *bot) sendReset(ctx context.Context, selector string) {
@@ -799,8 +790,16 @@ func isOnline(uuid string) bool {
 	return false
 }
 
-func formatTrafficLine(client models.Client, totals notifier.TrafficTotals) string {
-	return fmt.Sprintf("\n<b>🖥 %s</b>\n　⬆️ 上传　%s\n　⬇️ 下载　%s\n　📦 合计　<b>%s</b>", html.EscapeString(displayName(client)), humanBytes(totals.Up), humanBytes(totals.Down), humanBytes(totals.Up+totals.Down))
+func formatTrafficCard(client models.Client, totals notifier.TrafficTotals) string {
+	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n🔼 上传: %s\n🔽 下载: %s\n📊 总计: <b>%s</b>", html.EscapeString(displayName(client)), humanBytes(totals.Up), humanBytes(totals.Down), humanBytes(totals.Up+totals.Down))
+}
+
+func formatTrafficErrorCard(client models.Client) string {
+	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n⚠️ 流量统计失败", html.EscapeString(displayName(client)))
+}
+
+func formatAllTrafficCard(count int, up, down int64) string {
+	return fmt.Sprintf("🖥️ 机器: <b>全部机器（%d 台）</b>\n🔼 上传: %s\n🔽 下载: %s\n📊 总计: <b>%s</b>", count, humanBytes(up), humanBytes(down), humanBytes(up+down))
 }
 
 func humanBytes(value int64) string {

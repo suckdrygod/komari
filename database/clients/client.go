@@ -108,6 +108,9 @@ func SaveClientInfo(update map[string]interface{}) error {
 		if err := checkOptionalInt("Disk.Total", "disk_total", math.MaxInt64-1); err != nil {
 			return err
 		}
+		if err := checkOptionalInt("TrafficResetDay", "traffic_reset_day", 31); err != nil {
+			return err
+		}
 		return nil
 	}
 

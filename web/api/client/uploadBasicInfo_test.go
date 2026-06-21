@@ -66,7 +66,9 @@ func TestV2BasicInfoFillsRegionFromGeoIP(t *testing.T) {
 		Method:  v2.MethodAgentBasicInfo,
 		Params: map[string]interface{}{
 			"info": map[string]interface{}{
-				"ipv4": "8.8.8.8",
+				"ipv4":                   "8.8.8.8",
+				"traffic_reset_day":      15,
+				"traffic_reset_timezone": "Asia/Shanghai",
 			},
 		},
 		ID: "basic-info",
@@ -82,5 +84,8 @@ func TestV2BasicInfoFillsRegionFromGeoIP(t *testing.T) {
 	want := geoip.GetRegionUnicodeEmoji("SG")
 	if got.Region != want {
 		t.Fatalf("expected GeoIP region to be saved, got %q", got.Region)
+	}
+	if !got.TrafficResetReported || got.TrafficResetDay != 15 || got.TrafficResetTimezone != "Asia/Shanghai" {
+		t.Fatalf("expected exact traffic reset config to be saved, got reported=%v day=%d timezone=%q", got.TrafficResetReported, got.TrafficResetDay, got.TrafficResetTimezone)
 	}
 }

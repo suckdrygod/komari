@@ -62,7 +62,7 @@ func CheckTraffic() {
 		}
 
 		// 计算不同类型的使用值
-		used := computeUsedByType(strings.ToLower(c.TrafficLimitType), r.Network.TotalUp, r.Network.TotalDown)
+		used := ComputeUsedByType(strings.ToLower(c.TrafficLimitType), r.Network.TotalUp, r.Network.TotalDown)
 		if used <= 0 {
 			continue
 		}
@@ -106,7 +106,8 @@ func CheckTraffic() {
 	}
 }
 
-func computeUsedByType(t string, up, down int64) int64 {
+// ComputeUsedByType applies the configured traffic-limit accounting mode.
+func ComputeUsedByType(t string, up, down int64) int64 {
 	switch t {
 	case "up":
 		return up

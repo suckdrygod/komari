@@ -203,7 +203,7 @@ func getClientTrafficInRangeWithDB(db *gorm.DB, clientUUID string, trafficType s
 	if err != nil {
 		return 0, err
 	}
-	return computeUsedByType(strings.ToLower(trafficType), totals.Up, totals.Down), nil
+	return ComputeUsedByType(strings.ToLower(trafficType), totals.Up, totals.Down), nil
 }
 
 func getClientTrafficTotalsInRangeWithDB(db *gorm.DB, clientUUID string, start, end time.Time) (TrafficTotals, error) {

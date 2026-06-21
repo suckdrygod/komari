@@ -12,6 +12,7 @@ const (
 	MethodAgentPing       = "agent.ping"
 	MethodAgentMessage    = "agent.message"
 	MethodAgentEvent      = "agent.event"
+	MethodAgentSSHLogin   = "agent.sshLogin"
 	MethodAgentTerminal   = "agent.terminal.request"
 	MethodAgentPull       = "agent.pull"
 )
@@ -86,6 +87,14 @@ type MessageParams struct {
 type EventParams struct {
 	Type string `json:"type"`
 	Data any    `json:"data,omitempty"`
+}
+
+type SSHLoginParams struct {
+	User       string `json:"user"`
+	RemoteIP   string `json:"remote_ip"`
+	RemotePort int    `json:"remote_port"`
+	AuthMethod string `json:"auth_method"`
+	OccurredAt string `json:"occurred_at"`
 }
 
 type TerminalRequestParams struct {

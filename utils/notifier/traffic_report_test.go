@@ -95,6 +95,30 @@ func TestGetClientTrafficInRangeSumsPersistedDeltasAcrossCounterReset(t *testing
 	assert.Equal(t, int64(175), used)
 }
 
+func TestGetLatestClientTrafficResetFindsMostRecentCounterDrop(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	assert.NoError(t, err)
+	assert.NoError(t, db.AutoMigrate(&models.Record{}))
+	assert.NoError(t, db.Table("records_long_term").AutoMigrate(&models.Record{}))
+
+	clientUUID := "client-reset-date"
+	start := time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
+	records := []models.Record{
+		{Client: clientUUID, Time: models.FromTime(start), NetTotalUp: 100, NetTotalDown: 200},
+		{Client: clientUUID, Time: models.FromTime(start.Add(time.Hour)), NetTotalUp: 130, NetTotalDown: 260},
+		{Client: clientUUID, Time: models.FromTime(start.AddDate(0, 1, 0)), NetTotalUp: 5, NetTotalDown: 8},
+		{Client: clientUUID, Time: models.FromTime(start.AddDate(0, 1, 0).Add(time.Hour)), NetTotalUp: 20, NetTotalDown: 30},
+	}
+	for _, record := range records {
+		assert.NoError(t, db.Create(&record).Error)
+	}
+
+	resetAt, found, err := getLatestClientTrafficResetWithDB(db, clientUUID, start.Add(-time.Hour), start.AddDate(0, 1, 1))
+	assert.NoError(t, err)
+	assert.True(t, found)
+	assert.Equal(t, start.AddDate(0, 1, 0), resetAt)
+}
+
 func TestGetClientTrafficInRangeFallsBackForPersistedZeroDeltas(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	assert.NoError(t, err)

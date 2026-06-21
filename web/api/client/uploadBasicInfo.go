@@ -1,7 +1,10 @@
 package client
 
 import (
+	"fmt"
 	"net"
+	"strings"
+	"time"
 
 	"github.com/komari-monitor/komari/database/clients"
 	"github.com/komari-monitor/komari/pkg/config"
@@ -24,6 +27,24 @@ func getClientIPType(ip net.IP) int {
 
 func saveClientBasicInfo(info map[string]interface{}, uuid string, fallbackIP string) error {
 	info["uuid"] = uuid
+	if _, reported := info["traffic_reset_day"]; reported {
+		info["traffic_reset_reported"] = true
+		zone, _ := info["traffic_reset_timezone"].(string)
+		zone = strings.TrimSpace(zone)
+		if zone == "" {
+			zone = "Local"
+		}
+		if len(zone) > 64 {
+			return fmt.Errorf("traffic reset timezone is too long")
+		}
+		if _, err := time.LoadLocation(zone); err != nil {
+			return fmt.Errorf("invalid traffic reset timezone %q: %w", zone, err)
+		}
+		info["traffic_reset_timezone"] = zone
+	} else {
+		delete(info, "traffic_reset_timezone")
+		delete(info, "traffic_reset_reported")
+	}
 	applyFallbackClientIP(info, fallbackIP)
 	appendClientRegionFromGeoIP(info)
 	return clients.SaveClientInfo(info)

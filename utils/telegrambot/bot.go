@@ -557,8 +557,24 @@ func (b *bot) sendReset(ctx context.Context, selector string) {
 	now := time.Now().In(b.location)
 	lines := []string{"<b>🗓 流量重置日</b>\n━━━━━━━━━━━━━━"}
 	for _, client := range list {
-		resetAt, found, err := notifier.GetLatestClientTrafficReset(client.UUID, now)
 		name := html.EscapeString(displayName(client))
+		if client.TrafficResetReported {
+			zone := strings.TrimSpace(client.TrafficResetTimezone)
+			if zone == "" {
+				zone = "Local"
+			}
+			if client.TrafficResetDay == 0 {
+				lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　⏸ 探针未启用每月流量重置\n　🌐 时区　<code>%s</code>", name, html.EscapeString(zone)))
+			} else {
+				note := ""
+				if client.TrafficResetDay > 28 {
+					note = "（短月顺延至下月 1 日）"
+				}
+				lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　✅ 探针精确上报\n　📆 每月 <b>%d 日</b>%s\n　🌐 时区　<code>%s</code>", name, client.TrafficResetDay, note, html.EscapeString(zone)))
+			}
+			continue
+		}
+		resetAt, found, err := notifier.GetLatestClientTrafficReset(client.UUID, now)
 		if err != nil {
 			lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　⚠️ 查询失败", name))
 			continue
@@ -570,7 +586,7 @@ func (b *bot) sendReset(ctx context.Context, selector string) {
 		local := resetAt.In(b.location)
 		lines = append(lines, fmt.Sprintf("\n<b>%s</b>\n　📆 推测每月 <b>%d 日</b>\n　🕒 最近重置 %s", name, local.Day(), local.Format("2006-01-02 15:04")))
 	}
-	lines = append(lines, "\n━━━━━━━━━━━━━━\n<i>依据探针累计流量计数器最近一次归零推断。</i>")
+	lines = append(lines, "\n━━━━━━━━━━━━━━\n<i>新版探针显示精确配置；旧版探针降级为历史归零推断。</i>")
 	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
 }
 

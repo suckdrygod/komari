@@ -453,12 +453,32 @@ func sumTrafficDeltas(records []trafficDeltaRecord, previous *trafficDeltaRecord
 }
 
 func trafficDeltaOrFallback(storedDelta, currentTotal, previousTotal int64, hasPrevious bool, rollbackBase int64, hasRollbackBase bool) (int64, int64, int64, bool, bool) {
-	if storedDelta > 0 {
-		return storedDelta, currentTotal, 0, true, false
-	}
 	if !hasPrevious {
+		if storedDelta > 0 {
+			return storedDelta, currentTotal, 0, true, false
+		}
 		return 0, currentTotal, rollbackBase, true, hasRollbackBase
 	}
+
+	if storedDelta > 0 {
+		if currentTotal == 0 && previousTotal == 0 {
+			return storedDelta, currentTotal, 0, true, false
+		}
+		if hasRollbackBase {
+			if currentTotal >= rollbackBase {
+				return minTrafficDelta(storedDelta, currentTotal-rollbackBase), currentTotal, 0, true, false
+			}
+			if currentTotal >= previousTotal {
+				return minTrafficDelta(storedDelta, currentTotal-previousTotal), currentTotal, rollbackBase, true, true
+			}
+			return 0, currentTotal, rollbackBase, true, true
+		}
+		if currentTotal >= previousTotal {
+			return minTrafficDelta(storedDelta, currentTotal-previousTotal), currentTotal, 0, true, false
+		}
+		return storedDelta, currentTotal, 0, true, false
+	}
+
 	if hasRollbackBase {
 		if currentTotal >= rollbackBase {
 			return currentTotal - rollbackBase, currentTotal, 0, true, false
@@ -472,4 +492,14 @@ func trafficDeltaOrFallback(storedDelta, currentTotal, previousTotal int64, hasP
 		return 0, currentTotal, previousTotal, true, true
 	}
 	return currentTotal - previousTotal, currentTotal, 0, true, false
+}
+
+func minTrafficDelta(storedDelta, computedDelta int64) int64 {
+	if computedDelta < 0 {
+		return 0
+	}
+	if storedDelta < computedDelta {
+		return storedDelta
+	}
+	return computedDelta
 }

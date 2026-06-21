@@ -760,7 +760,18 @@ func isOnline(uuid string) bool {
 }
 
 func formatTrafficCard(client models.Client, totals notifier.TrafficTotals, totalLabel string) string {
+	totals = capTodayTrafficTotals(client, totals, totalLabel)
 	return notifier.FormatCompactTrafficCard(displayName(client), totalLabel, totals)
+}
+
+func capTodayTrafficTotals(client models.Client, totals notifier.TrafficTotals, totalLabel string) notifier.TrafficTotals {
+	if totalLabel != "今日" || strings.TrimSpace(client.UUID) == "" {
+		return totals
+	}
+	if latest, err := notifier.GetLatestClientTrafficTotals(client.UUID); err == nil {
+		return capTrafficTotals(totals, latest)
+	}
+	return totals
 }
 
 func capTrafficTotals(totals, limit notifier.TrafficTotals) notifier.TrafficTotals {

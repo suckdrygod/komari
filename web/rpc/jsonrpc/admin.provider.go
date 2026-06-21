@@ -9,6 +9,7 @@ import (
 	"github.com/komari-monitor/komari/pkg/rpc"
 	"github.com/komari-monitor/komari/utils/messageSender"
 	msfactory "github.com/komari-monitor/komari/utils/messageSender/factory"
+	"github.com/komari-monitor/komari/utils/telegrambot"
 	"github.com/komari-monitor/komari/web/oauth"
 	oauthfactory "github.com/komari-monitor/komari/web/oauth/factory"
 )
@@ -60,6 +61,9 @@ func adminSetMessageSender(_ context.Context, req *rpc.JsonRpcRequest) (any, *rp
 	if method == senderConfig.Name { // 正在使用，重载
 		if err := messageSender.LoadProvider(senderConfig.Name, senderConfig.Addition); err != nil {
 			return nil, rpc.MakeError(rpc.InternalError, "Failed to load message sender provider: "+err.Error(), nil)
+		}
+		if senderConfig.Name == "telegram" {
+			go telegrambot.Reload()
 		}
 	}
 	return map[string]any{"message": "Message sender provider set successfully"}, nil

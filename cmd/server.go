@@ -30,6 +30,7 @@ import (
 	logutil "github.com/komari-monitor/komari/utils/log"
 	"github.com/komari-monitor/komari/utils/messageSender"
 	"github.com/komari-monitor/komari/utils/notifier"
+	"github.com/komari-monitor/komari/utils/telegrambot"
 	"github.com/komari-monitor/komari/web/nezha"
 	"github.com/komari-monitor/komari/web/oauth"
 	report_cache "github.com/komari-monitor/komari/web/report"
@@ -70,6 +71,7 @@ func RunServer() {
 	go geoip.InitGeoIp()
 	go DoScheduledWork()
 	go messageSender.Initialize()
+	go telegrambot.Reload()
 	// oidcInit
 	go oauth.Initialize()
 
@@ -131,6 +133,7 @@ func RunServer() {
 
 		if event.IsChanged(config.NotificationMethodKey) {
 			go messageSender.Initialize()
+			go telegrambot.Reload()
 		}
 
 	})
@@ -227,6 +230,7 @@ func minuteScheduledWork() {
 
 func OnShutdown() {
 	auditlog.Log("", "", "server is shutting down", "info")
+	telegrambot.Stop()
 	corn.StopAll()
 	cloudflared.Shutdown()
 }

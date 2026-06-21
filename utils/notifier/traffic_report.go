@@ -176,6 +176,20 @@ func getClientTrafficInRange(clientUUID string, trafficType string, start, end t
 	return getClientTrafficInRangeWithDB(dbcore.GetDBInstance(), clientUUID, trafficType, start, end)
 }
 
+// TrafficTotals contains exact traffic deltas for a client and time range.
+// It is exported so trusted server-side integrations (for example the
+// Telegram command bot) can reuse the same reset-safe accounting as reports.
+type TrafficTotals struct {
+	Up   int64
+	Down int64
+}
+
+// GetClientTrafficTotalsInRange returns upload/download deltas from both raw
+// and compacted records, without double-counting overlapping 15-minute slots.
+func GetClientTrafficTotalsInRange(clientUUID string, start, end time.Time) (TrafficTotals, error) {
+	return getClientTrafficTotalsInRangeWithDB(dbcore.GetDBInstance(), clientUUID, start, end)
+}
+
 type trafficDeltaRecord struct {
 	Time         models.LocalTime `gorm:"column:time"`
 	NetTotalUp   int64            `gorm:"column:net_total_up"`
@@ -185,12 +199,20 @@ type trafficDeltaRecord struct {
 }
 
 func getClientTrafficInRangeWithDB(db *gorm.DB, clientUUID string, trafficType string, start, end time.Time) (int64, error) {
+	totals, err := getClientTrafficTotalsInRangeWithDB(db, clientUUID, start, end)
+	if err != nil {
+		return 0, err
+	}
+	return computeUsedByType(strings.ToLower(trafficType), totals.Up, totals.Down), nil
+}
+
+func getClientTrafficTotalsInRangeWithDB(db *gorm.DB, clientUUID string, start, end time.Time) (TrafficTotals, error) {
 	var recentRecords []trafficDeltaRecord
 	if err := db.Table("records").
 		Select("time, net_total_up, net_total_down, traffic_up, traffic_down").
 		Where("client = ? AND time >= ? AND time <= ?", clientUUID, models.FromTime(start), models.FromTime(end)).
 		Find(&recentRecords).Error; err != nil {
-		return 0, err
+		return TrafficTotals{}, err
 	}
 
 	var longTermRecords []trafficDeltaRecord
@@ -198,7 +220,7 @@ func getClientTrafficInRangeWithDB(db *gorm.DB, clientUUID string, trafficType s
 		Select("time, net_total_up, net_total_down, traffic_up, traffic_down").
 		Where("client = ? AND time >= ? AND time <= ?", clientUUID, models.FromTime(start), models.FromTime(end)).
 		Find(&longTermRecords).Error; err != nil {
-		return 0, err
+		return TrafficTotals{}, err
 	}
 
 	records := mergeTrafficRecords(recentRecords, longTermRecords)
@@ -209,11 +231,49 @@ func getClientTrafficInRangeWithDB(db *gorm.DB, clientUUID string, trafficType s
 
 	previous, err := getPreviousTrafficDeltaRecord(db, clientUUID, start)
 	if err != nil {
-		return 0, err
+		return TrafficTotals{}, err
 	}
 
 	totalUp, totalDown := sumTrafficDeltas(records, previous)
-	return computeUsedByType(strings.ToLower(trafficType), totalUp, totalDown), nil
+	return TrafficTotals{Up: totalUp, Down: totalDown}, nil
+}
+
+// GetLatestClientTrafficTotals returns the most recent cumulative counters
+// reported by an agent. These counters follow that agent's month-rotate cycle.
+func GetLatestClientTrafficTotals(clientUUID string) (TrafficTotals, error) {
+	db := dbcore.GetDBInstance()
+	recent, err := latestTrafficDeltaRecord(db.Table("records"), clientUUID)
+	if err != nil {
+		return TrafficTotals{}, err
+	}
+	longTerm, err := latestTrafficDeltaRecord(db.Table("records_long_term"), clientUUID)
+	if err != nil {
+		return TrafficTotals{}, err
+	}
+	latest := recent
+	if latest == nil || (longTerm != nil && longTerm.Time.ToTime().After(latest.Time.ToTime())) {
+		latest = longTerm
+	}
+	if latest == nil {
+		return TrafficTotals{}, nil
+	}
+	return TrafficTotals{Up: latest.NetTotalUp, Down: latest.NetTotalDown}, nil
+}
+
+func latestTrafficDeltaRecord(query *gorm.DB, clientUUID string) (*trafficDeltaRecord, error) {
+	var record trafficDeltaRecord
+	err := query.
+		Select("time, net_total_up, net_total_down, traffic_up, traffic_down").
+		Where("client = ?", clientUUID).
+		Order("time DESC").
+		First(&record).Error
+	if err == nil {
+		return &record, nil
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return nil, err
 }
 
 func mergeTrafficRecords(recentRecords, longTermRecords []trafficDeltaRecord) []trafficDeltaRecord {

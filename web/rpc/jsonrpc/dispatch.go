@@ -22,10 +22,14 @@ func Dispatch(ctx context.Context, meta *rpc.ContextMeta, req *rpc.JsonRpcReques
 		group = rpc.RoleGuest
 	}
 
-	// 私有站点：未登录访客一律拒绝。
+	// 私有站点：未登录访客默认拒绝，但保留旧 REST 公开路径迁移到
+	// RPC2 后仍必须可访问的 public 方法，否则前端无法读取 /api/me 和
+	// /api/public 来显示登录入口。
 	if group == rpc.RoleGuest {
 		if privateSite, _ := config.GetAs[bool](config.PrivateSiteKey); privateSite {
-			return rpc.ErrorResponse(req.ID, rpc.PermissionDenied, "Private site enabled, please login first", nil)
+			if !isPublicRPCAllowedInPrivateSite(req.Method) {
+				return rpc.ErrorResponse(req.ID, rpc.PermissionDenied, "Private site enabled, please login first", nil)
+			}
 		}
 	}
 
@@ -43,4 +47,16 @@ func OnInternalRequest(ctx context.Context, group string, method string, params 
 	meta := &rpc.ContextMeta{Permission: group}
 	req := &rpc.JsonRpcRequest{Version: rpc.RPC_VERSION, Method: method, Params: params}
 	return Dispatch(ctx, meta, req)
+}
+
+func isPublicRPCAllowedInPrivateSite(method string) bool {
+	switch method {
+	case "public:getMe",
+		"public:getPublicSettings",
+		"public:getVersion",
+		"public:getClientRecentRecords":
+		return true
+	default:
+		return false
+	}
 }

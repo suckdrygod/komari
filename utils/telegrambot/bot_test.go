@@ -176,6 +176,22 @@ func TestMainMenuKeyboard(t *testing.T) {
 	require.NotNil(t, keyboard)
 	assert.Equal(t, "menu:traffic", keyboard.InlineKeyboard[0][0].CallbackData)
 	assert.Equal(t, "nodes:0", keyboard.InlineKeyboard[0][1].CallbackData)
+	assert.Equal(t, "report:", keyboard.InlineKeyboard[2][0].CallbackData)
+}
+
+func TestRenderMainMenuText(t *testing.T) {
+	text := renderMainMenuText(menuStats{
+		Total:           12,
+		Online:          10,
+		Limited:         7,
+		ResetConfigured: 5,
+		Timezone:        "Asia/Shanghai",
+	})
+
+	assert.Contains(t, text, "Komari 流量控制台")
+	assert.Contains(t, text, "在线：<b>10 / 12</b>")
+	assert.Contains(t, text, "限额：<b>7</b>")
+	assert.Contains(t, text, "重置日：<b>5</b>")
 }
 
 func TestTruncateButtonText(t *testing.T) {
@@ -189,10 +205,14 @@ func TestCompactTrafficCards(t *testing.T) {
 
 	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n🔼 上传: 12.00 MB\n🔽 下载: 608.00 MB\n📊 今日: <b>620.00 MB</b>", formatTrafficCard(client, totals, "今日"))
 	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n⚠️ 流量统计失败", formatTrafficErrorCard(client))
-	assert.Equal(t, "🖥️ 机器: <b>全部机器（2 台）</b>\n🔼 上传: 1.00 KB\n🔽 下载: 2.00 KB\n📊 总计: <b>3.00 KB</b>", formatAllTrafficCard(2, 1024, 2048))
-	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n📈 已用: 600.00 MB\n📦 剩余: <b>400.00 MB</b>\n📊 总量: 1000.00 MB", formatRemainingCard(client, 600*1024*1024, 400*1024*1024, 1000*1024*1024, false))
-	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n📈 已用: 600.00 MB\n📦 剩余: <b>∞ 无限</b>\n📊 总量: ∞ 无限", formatRemainingCard(client, 600*1024*1024, 0, 0, true))
-	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n🔄 重置: 每月 1 日", formatResetCard(client, "每月 1 日"))
+	assert.Equal(t, "🖥️ 机器: <b>全部机器（2 台）</b>\n━━━━━━━━━━━━━━\n🔼 上传: 1.00 KB\n🔽 下载: 2.00 KB\n📊 总计: <b>3.00 KB</b>", formatAllTrafficCard(2, 1024, 2048))
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n━━━━━━━━━━━━━━\n📈 已用: 600.00 MB / 1000.00 MB\n📦 剩余: <b>400.00 MB</b>\n🎯 状态: 🟢 安全　60.0%\n▰▰▰▰▰▰▱▱▱▱", formatRemainingCard(client, 600*1024*1024, 400*1024*1024, 1000*1024*1024, false))
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n━━━━━━━━━━━━━━\n📈 已用: 600.00 MB\n📦 剩余: <b>∞ 无限</b>\n📊 总量: ∞ 无限\n🎯 状态: ⚪ 未设置流量上限", formatRemainingCard(client, 600*1024*1024, 0, 0, true))
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n━━━━━━━━━━━━━━\n🔄 重置: 每月 1 日", formatResetCard(client, "每月 1 日"))
+	assert.Equal(t, "▰▰▰▰▰▰▱▱▱▱", progressBar(60))
+	icon, text := trafficUsageStatus(92)
+	assert.Equal(t, "🔴", icon)
+	assert.Equal(t, "危险", text)
 }
 
 func TestCapTrafficTotals(t *testing.T) {

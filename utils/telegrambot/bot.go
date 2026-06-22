@@ -362,6 +362,9 @@ func (b *bot) handleCallback(ctx context.Context, callback *callbackQuery) {
 		b.sendResetList(ctx)
 	case "status":
 		b.sendStatus(ctx, uuid)
+	case "report":
+		b.sendRange(ctx, "today", uuid)
+		b.sendCycle(ctx, uuid)
 	}
 }
 
@@ -550,37 +553,73 @@ func helpText() string {
 }
 
 func (b *bot) sendMainMenu(ctx context.Context) {
-	_ = b.send(ctx, mainMenuText(), mainMenuKeyboard())
+	_ = b.send(ctx, b.mainMenuText(), mainMenuKeyboard())
 }
 
 func (b *bot) showMenuPanel(ctx context.Context, callback *callbackQuery, panel string) {
 	switch panel {
 	case "main":
-		b.editOrSend(ctx, callback, mainMenuText(), mainMenuKeyboard())
+		b.editOrSend(ctx, callback, b.mainMenuText(), mainMenuKeyboard())
 	case "traffic":
 		b.editOrSend(ctx, callback, trafficMenuText(), trafficMenuKeyboard())
 	case "help":
 		b.editOrSend(ctx, callback, helpText(), mainMenuKeyboard())
 	default:
-		b.editOrSend(ctx, callback, mainMenuText(), mainMenuKeyboard())
+		b.editOrSend(ctx, callback, b.mainMenuText(), mainMenuKeyboard())
 	}
 }
 
-func mainMenuText() string {
-	return `<b>🤖 Komari 控制台</b>
-━━━━━━━━━━━━━━
-请选择要查看的功能。
+type menuStats struct {
+	Total           int
+	Online          int
+	Limited         int
+	ResetConfigured int
+	Timezone        string
+}
 
-📊 流量统计：全部机器的今日、周期、累计、剩余等查询
+func (b *bot) mainMenuText() string {
+	stats := menuStats{Timezone: b.commandTimezone}
+	if stats.Timezone == "" && b.location != nil {
+		stats.Timezone = b.location.String()
+	}
+	if stats.Timezone == "" {
+		stats.Timezone = "Asia/Shanghai"
+	}
+	list, err := clients.GetAllClientBasicInfo()
+	if err == nil {
+		stats.Total = len(list)
+		for _, client := range list {
+			if isOnline(client.UUID) {
+				stats.Online++
+			}
+			if client.TrafficLimit > 0 {
+				stats.Limited++
+			}
+			if client.TrafficResetReported && client.TrafficResetDay > 0 {
+				stats.ResetConfigured++
+			}
+		}
+	}
+	return renderMainMenuText(stats)
+}
+
+func renderMainMenuText(stats menuStats) string {
+	return fmt.Sprintf(`<b>🤖 Komari 流量控制台</b>
+━━━━━━━━━━━━━━
+🟢 在线：<b>%d / %d</b>　📦 限额：<b>%d</b> 台
+🗓 重置日：<b>%d</b> 台　🕒 时区：<code>%s</code>
+
+请选择要查看的功能：
+📊 流量统计：今日 / 昨日 / 周期 / 累计 / 剩余
 🖥 机器列表：选择单台机器后查看详情
-🗓 重置日列表：汇总哪些机器设置了流量重置日`
+🗓 重置日列表：汇总已设置、推测和未启用的机器`, stats.Online, stats.Total, stats.Limited, stats.ResetConfigured, html.EscapeString(stats.Timezone))
 }
 
 func mainMenuKeyboard() *inlineKeyboard {
 	return &inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "📊 流量统计", CallbackData: "menu:traffic"}, {Text: "🖥 机器列表", CallbackData: "nodes:0"}},
 		{{Text: "🗓 重置日列表", CallbackData: "resetlist:all"}, {Text: "🟢 运行状态", CallbackData: "status:"}},
-		{{Text: "ℹ️ 帮助说明", CallbackData: "menu:help"}},
+		{{Text: "📋 完整报告", CallbackData: "report:"}, {Text: "ℹ️ 帮助说明", CallbackData: "menu:help"}},
 	}}
 }
 
@@ -589,15 +628,16 @@ func trafficMenuText() string {
 ━━━━━━━━━━━━━━
 请选择要查询的统计范围。
 
-这里的“全部”会按当前机器列表逐台发送结果；累计汇总会发送一张总计卡片。`
+优先使用 vnStat 周期统计；没有 vnStat 数据时，自动回落到探针记录。
+“剩余总流量”会结合面板里设置的流量上限显示状态灯和进度。`
 }
 
 func trafficMenuKeyboard() *inlineKeyboard {
 	return &inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "📊 今日全部", CallbackData: "today:"}, {Text: "📅 昨日全部", CallbackData: "yesterday:"}},
-		{{Text: "🔄 当前周期全部", CallbackData: "cycle:"}, {Text: "📊 累计全部", CallbackData: "total:"}},
-		{{Text: "🌐 所有机器累计", CallbackData: "alltotal:all"}, {Text: "📦 剩余总流量", CallbackData: "remaining:"}},
-		{{Text: "🗓 重置日列表", CallbackData: "resetlist:all"}},
+		{{Text: "🔄 当前周期", CallbackData: "cycle:"}, {Text: "📦 剩余总流量", CallbackData: "remaining:"}},
+		{{Text: "📊 累计全部", CallbackData: "total:"}, {Text: "🌐 全部累计汇总", CallbackData: "alltotal:all"}},
+		{{Text: "🗓 重置日列表", CallbackData: "resetlist:all"}, {Text: "📋 完整报告", CallbackData: "report:"}},
 		{{Text: "⬅️ 返回主面板", CallbackData: "menu:main"}},
 	}}
 }
@@ -695,12 +735,31 @@ func nodeCardPanel(client models.Client) (string, *inlineKeyboard) {
 	if isOnline(client.UUID) {
 		status = "🟢 在线"
 	}
-	text := fmt.Sprintf("<b>🖥 %s</b>\n━━━━━━━━━━━━━━\n<b>状态</b>　%s\n<b>UUID</b>　<code>%s</code>", html.EscapeString(displayName(client)), status, html.EscapeString(client.UUID))
+	limitText := "∞ 不限制"
+	if client.TrafficLimit > 0 {
+		limitText = fmt.Sprintf("%s（%s）", humanBytes(client.TrafficLimit), trafficLimitTypeLabel(client.TrafficLimitType))
+	}
+	resetText := "未启用"
+	if client.TrafficResetReported && client.TrafficResetDay > 0 {
+		resetText = fmt.Sprintf("每月 %d 日", client.TrafficResetDay)
+		if client.TrafficResetDay > 28 {
+			resetText += "（短月顺延）"
+		}
+	} else if !client.TrafficResetReported {
+		resetText = "自动推测"
+	}
+	text := fmt.Sprintf("<b>🖥 %s</b>\n━━━━━━━━━━━━━━\n<b>状态</b>　%s\n<b>流量上限</b>　%s\n<b>重置日</b>　%s\n<b>UUID</b>　<code>%s</code>",
+		html.EscapeString(displayName(client)),
+		status,
+		html.EscapeString(limitText),
+		html.EscapeString(resetText),
+		html.EscapeString(client.UUID),
+	)
 	keyboard := &inlineKeyboard{InlineKeyboard: [][]inlineButton{
 		{{Text: "📊 今日流量", CallbackData: "today:" + client.UUID}, {Text: "📅 昨日流量", CallbackData: "yesterday:" + client.UUID}},
 		{{Text: "🔄 当前周期", CallbackData: "cycle:" + client.UUID}, {Text: "🗓 重置日", CallbackData: "reset:" + client.UUID}},
 		{{Text: "📊 累计总流量", CallbackData: "total:" + client.UUID}, {Text: "📦 剩余总流量", CallbackData: "remaining:" + client.UUID}},
-		{{Text: "🟢 运行状态", CallbackData: "status:" + client.UUID}},
+		{{Text: "🟢 运行状态", CallbackData: "status:" + client.UUID}, {Text: "📋 完整报告", CallbackData: "report:" + client.UUID}},
 		{{Text: "⬅️ 返回机器列表", CallbackData: "nodes:0"}, {Text: "🏠 主面板", CallbackData: "menu:main"}},
 	}}
 	return text, keyboard
@@ -1067,7 +1126,7 @@ func formatTrafficErrorCard(client models.Client) string {
 }
 
 func formatAllTrafficCard(count int, up, down int64) string {
-	return fmt.Sprintf("🖥️ 机器: <b>全部机器（%d 台）</b>\n🔼 上传: %s\n🔽 下载: %s\n📊 总计: <b>%s</b>", count, humanBytes(up), humanBytes(down), humanBytes(up+down))
+	return fmt.Sprintf("🖥️ 机器: <b>全部机器（%d 台）</b>\n━━━━━━━━━━━━━━\n🔼 上传: %s\n🔽 下载: %s\n📊 总计: <b>%s</b>", count, humanBytes(up), humanBytes(down), humanBytes(up+down))
 }
 
 func formatRemainingCard(client models.Client, used, remaining, limit int64, unlimited bool) string {
@@ -1076,12 +1135,18 @@ func formatRemainingCard(client models.Client, used, remaining, limit int64, unl
 	if unlimited {
 		remainingText = "∞ 无限"
 		limitText = "∞ 无限"
+		return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n━━━━━━━━━━━━━━\n📈 已用: %s\n📦 剩余: <b>%s</b>\n📊 总量: %s\n🎯 状态: ⚪ 未设置流量上限", html.EscapeString(displayName(client)), humanBytes(used), remainingText, limitText)
 	}
-	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n📈 已用: %s\n📦 剩余: <b>%s</b>\n📊 总量: %s", html.EscapeString(displayName(client)), humanBytes(used), remainingText, limitText)
+	percent := 0.0
+	if limit > 0 {
+		percent = float64(used) / float64(limit) * 100
+	}
+	statusIcon, statusText := trafficUsageStatus(percent)
+	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n━━━━━━━━━━━━━━\n📈 已用: %s / %s\n📦 剩余: <b>%s</b>\n🎯 状态: %s %s　%.1f%%\n%s", html.EscapeString(displayName(client)), humanBytes(used), limitText, remainingText, statusIcon, statusText, percent, progressBar(percent))
 }
 
 func formatResetCard(client models.Client, resetText string) string {
-	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n🔄 重置: %s", html.EscapeString(displayName(client)), html.EscapeString(resetText))
+	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n━━━━━━━━━━━━━━\n🔄 重置: %s", html.EscapeString(displayName(client)), html.EscapeString(resetText))
 }
 
 func formatResetListLine(client models.Client, status resetStatus) string {
@@ -1138,6 +1203,53 @@ func humanBytes(value int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.2f %cB", float64(value)/float64(div), "KMGTPE"[exp])
+}
+
+func progressBar(percent float64) string {
+	if percent < 0 {
+		percent = 0
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	filled := int(percent/10 + 0.5)
+	if filled > 10 {
+		filled = 10
+	}
+	if filled < 0 {
+		filled = 0
+	}
+	return strings.Repeat("▰", filled) + strings.Repeat("▱", 10-filled)
+}
+
+func trafficUsageStatus(percent float64) (string, string) {
+	switch {
+	case percent >= 100:
+		return "🔴", "已用尽"
+	case percent >= 90:
+		return "🔴", "危险"
+	case percent >= 75:
+		return "🟡", "偏高"
+	default:
+		return "🟢", "安全"
+	}
+}
+
+func trafficLimitTypeLabel(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "up":
+		return "只算上传"
+	case "down":
+		return "只算下载"
+	case "max":
+		return "上传/下载取大"
+	case "min":
+		return "上传/下载取小"
+	case "sum", "":
+		return "上传+下载"
+	default:
+		return value
+	}
 }
 
 func formatDuration(value time.Duration) string {

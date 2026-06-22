@@ -82,7 +82,7 @@ func TestSetCommandsAndGetUpdates(t *testing.T) {
 
 	b := &bot{baseURL: server.URL + "/bot-token", chatID: 42, client: server.Client()}
 	require.NoError(t, b.configureMenu(context.Background()))
-	assert.Equal(t, 12, commandCount)
+	assert.Equal(t, 13, commandCount)
 	assert.True(t, menuButtonSet)
 
 	updates, err := b.getUpdates(context.Background(), 10)
@@ -118,6 +118,41 @@ func TestHumanBytes(t *testing.T) {
 	assert.Equal(t, "0 B", humanBytes(-1))
 	assert.Equal(t, "1.00 KB", humanBytes(1024))
 	assert.Equal(t, "1.50 GB", humanBytes(3*1024*1024*1024/2))
+}
+
+func TestResetStatusForReportedClients(t *testing.T) {
+	b := &bot{location: time.UTC}
+
+	configured := b.resetStatusForClient(models.Client{TrafficResetReported: true, TrafficResetDay: 31}, time.Now())
+	assert.Equal(t, resetStatusConfigured, configured.Kind)
+	assert.Equal(t, "每月 31 日（短月顺延）", configured.Text)
+
+	disabled := b.resetStatusForClient(models.Client{TrafficResetReported: true, TrafficResetDay: 0}, time.Now())
+	assert.Equal(t, resetStatusDisabled, disabled.Kind)
+	assert.Equal(t, "未启用", disabled.Text)
+}
+
+func TestFormatResetListLine(t *testing.T) {
+	client := models.Client{Name: "VPS <01>"}
+
+	assert.Equal(t, "✅ <b>VPS &lt;01&gt;</b> — 每月 11 日", formatResetListLine(client, resetStatus{Kind: resetStatusConfigured, Text: "每月 11 日"}))
+	assert.Equal(t, "➖ <b>VPS &lt;01&gt;</b> — 未启用", formatResetListLine(client, resetStatus{Kind: resetStatusDisabled, Text: "未启用"}))
+	assert.Equal(t, "🧭 <b>VPS &lt;01&gt;</b> — 推测每月 1 日", formatResetListLine(client, resetStatus{Kind: resetStatusInferred, Text: "推测每月 1 日"}))
+	assert.Equal(t, "❔ <b>VPS &lt;01&gt;</b> — 暂未检测到", formatResetListLine(client, resetStatus{Kind: resetStatusUnknown, Text: "暂未检测到"}))
+}
+
+func TestChunkTelegramMessage(t *testing.T) {
+	lines := make([]string, 0, 200)
+	for i := 0; i < 200; i++ {
+		lines = append(lines, strings.Repeat("机器", 20))
+	}
+
+	chunks := chunkTelegramMessage("<b>header</b>\n\n", lines)
+
+	require.Greater(t, len(chunks), 1)
+	for _, chunk := range chunks {
+		assert.LessOrEqual(t, len(chunk), 3800)
+	}
 }
 
 func TestCompactTrafficCards(t *testing.T) {

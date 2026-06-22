@@ -310,6 +310,8 @@ func (b *bot) handleCommand(ctx context.Context, text string) {
 		b.sendRemaining(ctx, selector)
 	case "/reset":
 		b.sendReset(ctx, selector)
+	case "/resetlist":
+		b.sendResetList(ctx)
 	case "/status":
 		b.sendStatus(ctx, selector)
 	case "/report":
@@ -346,6 +348,8 @@ func (b *bot) handleCallback(ctx context.Context, data string) {
 		b.sendRemaining(ctx, uuid)
 	case "reset":
 		b.sendReset(ctx, uuid)
+	case "resetlist":
+		b.sendResetList(ctx)
 	case "status":
 		b.sendStatus(ctx, uuid)
 	}
@@ -362,6 +366,7 @@ func (b *bot) configureMenu(ctx context.Context) error {
 		{"command": "alltotal", "description": "查询所有机器累计总流量"},
 		{"command": "remaining", "description": "查询机器剩余总流量"},
 		{"command": "reset", "description": "查询每台机器流量重置日"},
+		{"command": "resetlist", "description": "列出所有机器重置日设置"},
 		{"command": "status", "description": "查询机器在线与运行状态"},
 		{"command": "report", "description": "立即生成完整流量报告"},
 		{"command": "help", "description": "查看命令使用说明"},
@@ -463,6 +468,7 @@ func helpText() string {
 /alltotal — 所有机器累计总流量
 /remaining — 剩余总流量
 /reset — 每台机器流量重置日
+/resetlist — 所有机器重置日列表
 
 <b>🖥 节点管理</b>
 /nodes — 选择监控机器
@@ -489,6 +495,7 @@ func (b *bot) sendNodes(ctx context.Context) {
 	}
 	rows := make([][]inlineButton, 0, (len(list)+1)/2)
 	rows = append(rows, []inlineButton{{Text: "🌐 所有机器累计总流量", CallbackData: "alltotal:all"}})
+	rows = append(rows, []inlineButton{{Text: "🗓 所有机器重置日列表", CallbackData: "resetlist:all"}})
 	for i := 0; i < len(list); i += 2 {
 		row := []inlineButton{{Text: onlineMark(list[i].UUID) + displayName(list[i]), CallbackData: "node:" + list[i].UUID}}
 		if i+1 < len(list) {
@@ -634,30 +641,77 @@ func (b *bot) sendReset(ctx context.Context, selector string) {
 	}
 	now := time.Now().In(b.location)
 	for _, client := range list {
-		resetText := "暂未检测到"
-		if client.TrafficResetReported {
-			if client.TrafficResetDay == 0 {
-				resetText = "未启用"
-			} else {
-				note := ""
-				if client.TrafficResetDay > 28 {
-					note = "（短月顺延）"
-				}
-				resetText = fmt.Sprintf("每月 %d 日%s", client.TrafficResetDay, note)
-			}
-			_ = b.send(ctx, formatResetCard(client, resetText), nil)
-			continue
-		}
-		resetAt, found, err := notifier.GetLatestClientTrafficReset(client.UUID, now)
-		if err != nil {
-			_ = b.send(ctx, formatResetCard(client, "查询失败"), nil)
-			continue
-		}
-		if found {
-			resetText = fmt.Sprintf("推测每月 %d 日", resetAt.In(b.location).Day())
-		}
-		_ = b.send(ctx, formatResetCard(client, resetText), nil)
+		status := b.resetStatusForClient(client, now)
+		_ = b.send(ctx, formatResetCard(client, status.Text), nil)
 	}
+}
+
+func (b *bot) sendResetList(ctx context.Context) {
+	list, err := clients.GetAllClientBasicInfo()
+	if err != nil {
+		_ = b.send(ctx, "读取节点失败。", nil)
+		return
+	}
+	sortClients(list)
+	if len(list) == 0 {
+		_ = b.send(ctx, "当前没有已添加的监控节点。", nil)
+		return
+	}
+
+	now := time.Now().In(b.location)
+	counts := map[resetStatusKind]int{}
+	lines := make([]string, 0, len(list))
+	for _, client := range list {
+		status := b.resetStatusForClient(client, now)
+		counts[status.Kind]++
+		lines = append(lines, formatResetListLine(client, status))
+	}
+
+	header := fmt.Sprintf("<b>🗓 流量重置日列表</b>\n━━━━━━━━━━━━━━\n✅ 已设置：%d　➖ 未启用：%d\n🧭 推测：%d　❔ 暂未检测：%d\n\n",
+		counts[resetStatusConfigured],
+		counts[resetStatusDisabled],
+		counts[resetStatusInferred],
+		counts[resetStatusUnknown]+counts[resetStatusError],
+	)
+	for _, message := range chunkTelegramMessage(header, lines) {
+		_ = b.send(ctx, message, nil)
+	}
+}
+
+type resetStatusKind int
+
+const (
+	resetStatusConfigured resetStatusKind = iota
+	resetStatusDisabled
+	resetStatusInferred
+	resetStatusUnknown
+	resetStatusError
+)
+
+type resetStatus struct {
+	Kind resetStatusKind
+	Text string
+}
+
+func (b *bot) resetStatusForClient(client models.Client, now time.Time) resetStatus {
+	if client.TrafficResetReported {
+		if client.TrafficResetDay == 0 {
+			return resetStatus{Kind: resetStatusDisabled, Text: "未启用"}
+		}
+		note := ""
+		if client.TrafficResetDay > 28 {
+			note = "（短月顺延）"
+		}
+		return resetStatus{Kind: resetStatusConfigured, Text: fmt.Sprintf("每月 %d 日%s", client.TrafficResetDay, note)}
+	}
+	resetAt, found, err := notifier.GetLatestClientTrafficReset(client.UUID, now)
+	if err != nil {
+		return resetStatus{Kind: resetStatusError, Text: "查询失败"}
+	}
+	if found {
+		return resetStatus{Kind: resetStatusInferred, Text: fmt.Sprintf("推测每月 %d 日", resetAt.In(b.location).Day())}
+	}
+	return resetStatus{Kind: resetStatusUnknown, Text: "暂未检测到"}
 }
 
 func (b *bot) sendRemaining(ctx context.Context, selector string) {
@@ -834,6 +888,46 @@ func formatRemainingCard(client models.Client, used, remaining, limit int64, unl
 
 func formatResetCard(client models.Client, resetText string) string {
 	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n🔄 重置: %s", html.EscapeString(displayName(client)), html.EscapeString(resetText))
+}
+
+func formatResetListLine(client models.Client, status resetStatus) string {
+	icon := "❔"
+	switch status.Kind {
+	case resetStatusConfigured:
+		icon = "✅"
+	case resetStatusDisabled:
+		icon = "➖"
+	case resetStatusInferred:
+		icon = "🧭"
+	case resetStatusError:
+		icon = "⚠️"
+	}
+	return fmt.Sprintf("%s <b>%s</b> — %s", icon, html.EscapeString(displayName(client)), html.EscapeString(status.Text))
+}
+
+func chunkTelegramMessage(header string, lines []string) []string {
+	const maxTelegramTextLen = 3800
+	if len(lines) == 0 {
+		return []string{strings.TrimSpace(header)}
+	}
+	var chunks []string
+	current := header
+	for _, line := range lines {
+		next := line
+		if strings.TrimSpace(current) != "" {
+			next = current + line + "\n"
+		}
+		if len(next) > maxTelegramTextLen && strings.TrimSpace(current) != "" {
+			chunks = append(chunks, strings.TrimSpace(current))
+			current = line + "\n"
+			continue
+		}
+		current = next
+	}
+	if strings.TrimSpace(current) != "" {
+		chunks = append(chunks, strings.TrimSpace(current))
+	}
+	return chunks
 }
 
 func humanBytes(value int64) string {

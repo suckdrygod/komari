@@ -32,6 +32,7 @@ import (
 const (
 	defaultEndpoint = "https://api.telegram.org/bot"
 	maxNodes        = 30
+	nodePageSize    = 10
 )
 
 var manager struct {
@@ -283,7 +284,7 @@ func (b *bot) handleUpdate(ctx context.Context, item update) {
 		return
 	}
 	_ = b.answerCallback(ctx, callback.ID)
-	b.handleCallback(ctx, callback.Data)
+	b.handleCallback(ctx, callback)
 }
 
 func (b *bot) handleCommand(ctx context.Context, text string) {
@@ -294,8 +295,10 @@ func (b *bot) handleCommand(ctx context.Context, text string) {
 	command := strings.ToLower(strings.SplitN(fields[0], "@", 2)[0])
 	selector := strings.TrimSpace(strings.Join(fields[1:], " "))
 	switch command {
-	case "/start", "/help":
-		_ = b.send(ctx, helpText(), nil)
+	case "/start":
+		b.sendMainMenu(ctx)
+	case "/help":
+		_ = b.send(ctx, helpText(), mainMenuKeyboard())
 	case "/nodes":
 		b.sendNodes(ctx)
 	case "/today", "/yesterday":
@@ -322,20 +325,26 @@ func (b *bot) handleCommand(ctx context.Context, text string) {
 	}
 }
 
-func (b *bot) handleCallback(ctx context.Context, data string) {
+func (b *bot) handleCallback(ctx context.Context, callback *callbackQuery) {
+	data := callback.Data
 	parts := strings.SplitN(data, ":", 2)
 	if len(parts) != 2 {
 		return
 	}
 	action, uuid := parts[0], parts[1]
 	switch action {
+	case "menu":
+		b.showMenuPanel(ctx, callback, uuid)
+	case "nodes":
+		page, _ := strconv.Atoi(uuid)
+		b.showNodesPage(ctx, callback, page)
 	case "node":
 		client, ok := findClient(uuid)
 		if !ok {
 			_ = b.send(ctx, "节点不存在或已被删除。", nil)
 			return
 		}
-		b.sendNodeCard(ctx, client)
+		b.showNodeCard(ctx, callback, client)
 	case "today", "yesterday":
 		b.sendRange(ctx, action, uuid)
 	case "cycle":
@@ -423,6 +432,29 @@ func (b *bot) send(ctx context.Context, text string, keyboard *inlineKeyboard) e
 	return b.call(ctx, "sendMessage", values, nil)
 }
 
+func (b *bot) editMessage(ctx context.Context, messageID int64, text string, keyboard *inlineKeyboard) error {
+	values := url.Values{
+		"chat_id":    {strconv.FormatInt(b.chatID, 10)},
+		"message_id": {strconv.FormatInt(messageID, 10)},
+		"text":       {text},
+		"parse_mode": {"HTML"},
+	}
+	if keyboard != nil {
+		encoded, _ := json.Marshal(keyboard)
+		values.Set("reply_markup", string(encoded))
+	}
+	return b.call(ctx, "editMessageText", values, nil)
+}
+
+func (b *bot) editOrSend(ctx context.Context, callback *callbackQuery, text string, keyboard *inlineKeyboard) {
+	if callback != nil && callback.Message != nil && callback.Message.MessageID != 0 {
+		if err := b.editMessage(ctx, callback.Message.MessageID, text, keyboard); err == nil || strings.Contains(strings.ToLower(err.Error()), "message is not modified") {
+			return
+		}
+	}
+	_ = b.send(ctx, text, keyboard)
+}
+
 func (b *bot) answerCallback(ctx context.Context, id string) error {
 	return b.call(ctx, "answerCallbackQuery", url.Values{"callback_query_id": {id}}, nil)
 }
@@ -479,7 +511,64 @@ func helpText() string {
 命令后可附机器名称或 UUID；不填写时查询全部机器。`
 }
 
+func (b *bot) sendMainMenu(ctx context.Context) {
+	_ = b.send(ctx, mainMenuText(), mainMenuKeyboard())
+}
+
+func (b *bot) showMenuPanel(ctx context.Context, callback *callbackQuery, panel string) {
+	switch panel {
+	case "main":
+		b.editOrSend(ctx, callback, mainMenuText(), mainMenuKeyboard())
+	case "traffic":
+		b.editOrSend(ctx, callback, trafficMenuText(), trafficMenuKeyboard())
+	case "help":
+		b.editOrSend(ctx, callback, helpText(), mainMenuKeyboard())
+	default:
+		b.editOrSend(ctx, callback, mainMenuText(), mainMenuKeyboard())
+	}
+}
+
+func mainMenuText() string {
+	return `<b>🤖 Komari 控制台</b>
+━━━━━━━━━━━━━━
+请选择要查看的功能。
+
+📊 流量统计：全部机器的今日、周期、累计、剩余等查询
+🖥 机器列表：选择单台机器后查看详情
+🗓 重置日列表：汇总哪些机器设置了流量重置日`
+}
+
+func mainMenuKeyboard() *inlineKeyboard {
+	return &inlineKeyboard{InlineKeyboard: [][]inlineButton{
+		{{Text: "📊 流量统计", CallbackData: "menu:traffic"}, {Text: "🖥 机器列表", CallbackData: "nodes:0"}},
+		{{Text: "🗓 重置日列表", CallbackData: "resetlist:all"}, {Text: "🟢 运行状态", CallbackData: "status:"}},
+		{{Text: "ℹ️ 帮助说明", CallbackData: "menu:help"}},
+	}}
+}
+
+func trafficMenuText() string {
+	return `<b>📊 流量统计</b>
+━━━━━━━━━━━━━━
+请选择要查询的统计范围。
+
+这里的“全部”会按当前机器列表逐台发送结果；累计汇总会发送一张总计卡片。`
+}
+
+func trafficMenuKeyboard() *inlineKeyboard {
+	return &inlineKeyboard{InlineKeyboard: [][]inlineButton{
+		{{Text: "📊 今日全部", CallbackData: "today:"}, {Text: "📅 昨日全部", CallbackData: "yesterday:"}},
+		{{Text: "🔄 当前周期全部", CallbackData: "cycle:"}, {Text: "📊 累计全部", CallbackData: "total:"}},
+		{{Text: "🌐 所有机器累计", CallbackData: "alltotal:all"}, {Text: "📦 剩余总流量", CallbackData: "remaining:"}},
+		{{Text: "🗓 重置日列表", CallbackData: "resetlist:all"}},
+		{{Text: "⬅️ 返回主面板", CallbackData: "menu:main"}},
+	}}
+}
+
 func (b *bot) sendNodes(ctx context.Context) {
+	b.sendNodesPage(ctx, 0)
+}
+
+func (b *bot) sendNodesPage(ctx context.Context, page int) {
 	list, err := clients.GetAllClientBasicInfo()
 	if err != nil {
 		_ = b.send(ctx, "读取节点失败。", nil)
@@ -490,23 +579,80 @@ func (b *bot) sendNodes(ctx context.Context) {
 		_ = b.send(ctx, "当前没有已添加的监控节点。", nil)
 		return
 	}
-	if len(list) > maxNodes {
-		list = list[:maxNodes]
+	text, keyboard := nodesPagePanel(list, page)
+	_ = b.send(ctx, text, keyboard)
+}
+
+func (b *bot) showNodesPage(ctx context.Context, callback *callbackQuery, page int) {
+	list, err := clients.GetAllClientBasicInfo()
+	if err != nil {
+		b.editOrSend(ctx, callback, "读取节点失败。", mainMenuKeyboard())
+		return
 	}
-	rows := make([][]inlineButton, 0, (len(list)+1)/2)
+	sortClients(list)
+	if len(list) == 0 {
+		b.editOrSend(ctx, callback, "当前没有已添加的监控节点。", mainMenuKeyboard())
+		return
+	}
+	text, keyboard := nodesPagePanel(list, page)
+	b.editOrSend(ctx, callback, text, keyboard)
+}
+
+func nodesPagePanel(list []models.Client, page int) (string, *inlineKeyboard) {
+	totalPages := (len(list) + nodePageSize - 1) / nodePageSize
+	if totalPages < 1 {
+		totalPages = 1
+	}
+	if page < 0 {
+		page = 0
+	}
+	if page >= totalPages {
+		page = totalPages - 1
+	}
+	start := page * nodePageSize
+	end := start + nodePageSize
+	if end > len(list) {
+		end = len(list)
+	}
+
+	rows := make([][]inlineButton, 0, (end-start+1)/2+4)
 	rows = append(rows, []inlineButton{{Text: "🌐 所有机器累计总流量", CallbackData: "alltotal:all"}})
 	rows = append(rows, []inlineButton{{Text: "🗓 所有机器重置日列表", CallbackData: "resetlist:all"}})
-	for i := 0; i < len(list); i += 2 {
-		row := []inlineButton{{Text: onlineMark(list[i].UUID) + displayName(list[i]), CallbackData: "node:" + list[i].UUID}}
-		if i+1 < len(list) {
-			row = append(row, inlineButton{Text: onlineMark(list[i+1].UUID) + displayName(list[i+1]), CallbackData: "node:" + list[i+1].UUID})
+	for i := start; i < end; i += 2 {
+		row := []inlineButton{{Text: truncateButtonText(onlineMark(list[i].UUID) + displayName(list[i])), CallbackData: "node:" + list[i].UUID}}
+		if i+1 < end {
+			row = append(row, inlineButton{Text: truncateButtonText(onlineMark(list[i+1].UUID) + displayName(list[i+1])), CallbackData: "node:" + list[i+1].UUID})
 		}
 		rows = append(rows, row)
 	}
-	_ = b.send(ctx, "<b>🖥 选择监控机器</b>\n━━━━━━━━━━━━━━\n🟢 在线　⚫ 离线\n\n点击机器名称查看详情：", &inlineKeyboard{InlineKeyboard: rows})
+	if totalPages > 1 {
+		nav := []inlineButton{}
+		if page > 0 {
+			nav = append(nav, inlineButton{Text: "⬅️ 上一页", CallbackData: fmt.Sprintf("nodes:%d", page-1)})
+		}
+		nav = append(nav, inlineButton{Text: fmt.Sprintf("%d/%d", page+1, totalPages), CallbackData: fmt.Sprintf("nodes:%d", page)})
+		if page+1 < totalPages {
+			nav = append(nav, inlineButton{Text: "下一页 ➡️", CallbackData: fmt.Sprintf("nodes:%d", page+1)})
+		}
+		rows = append(rows, nav)
+	}
+	rows = append(rows, []inlineButton{{Text: "⬅️ 返回主面板", CallbackData: "menu:main"}})
+
+	text := fmt.Sprintf("<b>🖥 机器列表</b>\n━━━━━━━━━━━━━━\n🟢 在线　⚫ 离线\n第 %d/%d 页，共 %d 台。\n\n点击机器名称查看详情：", page+1, totalPages, len(list))
+	return text, &inlineKeyboard{InlineKeyboard: rows}
 }
 
 func (b *bot) sendNodeCard(ctx context.Context, client models.Client) {
+	text, keyboard := nodeCardPanel(client)
+	_ = b.send(ctx, text, keyboard)
+}
+
+func (b *bot) showNodeCard(ctx context.Context, callback *callbackQuery, client models.Client) {
+	text, keyboard := nodeCardPanel(client)
+	b.editOrSend(ctx, callback, text, keyboard)
+}
+
+func nodeCardPanel(client models.Client) (string, *inlineKeyboard) {
 	status := "⚫ 离线"
 	if isOnline(client.UUID) {
 		status = "🟢 在线"
@@ -517,8 +663,9 @@ func (b *bot) sendNodeCard(ctx context.Context, client models.Client) {
 		{{Text: "🔄 当前周期", CallbackData: "cycle:" + client.UUID}, {Text: "🗓 重置日", CallbackData: "reset:" + client.UUID}},
 		{{Text: "📊 累计总流量", CallbackData: "total:" + client.UUID}, {Text: "📦 剩余总流量", CallbackData: "remaining:" + client.UUID}},
 		{{Text: "🟢 运行状态", CallbackData: "status:" + client.UUID}},
+		{{Text: "⬅️ 返回机器列表", CallbackData: "nodes:0"}, {Text: "🏠 主面板", CallbackData: "menu:main"}},
 	}}
-	_ = b.send(ctx, text, keyboard)
+	return text, keyboard
 }
 
 func (b *bot) sendRange(ctx context.Context, kind, selector string) {
@@ -825,6 +972,15 @@ func displayName(client models.Client) string {
 		return client.Name
 	}
 	return client.UUID
+}
+
+func truncateButtonText(text string) string {
+	const maxRunes = 24
+	runes := []rune(strings.TrimSpace(text))
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes-1]) + "…"
 }
 
 func onlineMark(uuid string) string {

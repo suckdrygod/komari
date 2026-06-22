@@ -3,6 +3,7 @@ package telegrambot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -153,6 +154,33 @@ func TestChunkTelegramMessage(t *testing.T) {
 	for _, chunk := range chunks {
 		assert.LessOrEqual(t, len(chunk), 3800)
 	}
+}
+
+func TestNodesPagePanelPaginates(t *testing.T) {
+	list := make([]models.Client, 0, nodePageSize+1)
+	for i := 0; i < nodePageSize+1; i++ {
+		list = append(list, models.Client{UUID: fmt.Sprintf("uuid-%02d", i), Name: fmt.Sprintf("Node %02d", i)})
+	}
+
+	text, keyboard := nodesPagePanel(list, 0)
+
+	assert.Contains(t, text, "第 1/2 页")
+	require.NotNil(t, keyboard)
+	assert.Contains(t, keyboard.InlineKeyboard[len(keyboard.InlineKeyboard)-2][0].Text, "1/2")
+	assert.Equal(t, "下一页 ➡️", keyboard.InlineKeyboard[len(keyboard.InlineKeyboard)-2][1].Text)
+}
+
+func TestMainMenuKeyboard(t *testing.T) {
+	keyboard := mainMenuKeyboard()
+
+	require.NotNil(t, keyboard)
+	assert.Equal(t, "menu:traffic", keyboard.InlineKeyboard[0][0].CallbackData)
+	assert.Equal(t, "nodes:0", keyboard.InlineKeyboard[0][1].CallbackData)
+}
+
+func TestTruncateButtonText(t *testing.T) {
+	assert.Equal(t, "短名称", truncateButtonText("短名称"))
+	assert.True(t, strings.HasSuffix(truncateButtonText(strings.Repeat("长", 40)), "…"))
 }
 
 func TestCompactTrafficCards(t *testing.T) {

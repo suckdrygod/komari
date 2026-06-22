@@ -205,6 +205,7 @@ func DoScheduledWork() {
 		log.Println("Failed to add expire notification scheduled task:", err)
 	}
 	notifier.InitTrafficReportSchedule()
+	notifier.InitTrafficResetReminderSchedule()
 }
 
 func cleanupScheduledData() {

@@ -33,6 +33,7 @@ const (
 	defaultEndpoint = "https://api.telegram.org/bot"
 	maxNodes        = 30
 	nodePageSize    = 10
+	autoDeleteDelay = 5 * time.Minute
 )
 
 var manager struct {
@@ -417,6 +418,22 @@ func (b *bot) getUpdates(ctx context.Context, offset int64) ([]update, error) {
 }
 
 func (b *bot) send(ctx context.Context, text string, keyboard *inlineKeyboard) error {
+	_, err := b.sendMessage(ctx, text, keyboard)
+	return err
+}
+
+func (b *bot) sendEphemeral(ctx context.Context, text string, keyboard *inlineKeyboard) error {
+	message, err := b.sendMessage(ctx, text, keyboard)
+	if err != nil {
+		return err
+	}
+	if message.MessageID != 0 {
+		b.scheduleDeleteMessage(message.MessageID, autoDeleteDelay)
+	}
+	return nil
+}
+
+func (b *bot) sendMessage(ctx context.Context, text string, keyboard *inlineKeyboard) (telegramMessage, error) {
 	values := url.Values{
 		"chat_id":    {strconv.FormatInt(b.chatID, 10)},
 		"text":       {text},
@@ -429,7 +446,28 @@ func (b *bot) send(ctx context.Context, text string, keyboard *inlineKeyboard) e
 		encoded, _ := json.Marshal(keyboard)
 		values.Set("reply_markup", string(encoded))
 	}
-	return b.call(ctx, "sendMessage", values, nil)
+	var message telegramMessage
+	if err := b.call(ctx, "sendMessage", values, &message); err != nil {
+		return telegramMessage{}, err
+	}
+	return message, nil
+}
+
+func (b *bot) deleteMessage(ctx context.Context, messageID int64) error {
+	return b.call(ctx, "deleteMessage", url.Values{
+		"chat_id":    {strconv.FormatInt(b.chatID, 10)},
+		"message_id": {strconv.FormatInt(messageID, 10)},
+	}, nil)
+}
+
+func (b *bot) scheduleDeleteMessage(messageID int64, delay time.Duration) {
+	time.AfterFunc(delay, func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := b.deleteMessage(ctx, messageID); err != nil {
+			log.Printf("Telegram auto-delete message %d failed: %v", messageID, err)
+		}
+	})
 }
 
 func (b *bot) editMessage(ctx context.Context, messageID int64, text string, keyboard *inlineKeyboard) error {
@@ -680,13 +718,13 @@ func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 	}
 	list, err := selectClients(selector)
 	if err != nil {
-		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		_ = b.sendEphemeral(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
 	for _, client := range list {
 		totals, err := notifier.GetClientTrafficTotalsInRange(client.UUID, start, end)
 		if err != nil {
-			_ = b.send(ctx, formatTrafficErrorCard(client), nil)
+			_ = b.sendEphemeral(ctx, formatTrafficErrorCard(client), nil)
 			continue
 		}
 		usedVnstat := false
@@ -699,20 +737,20 @@ func (b *bot) sendRange(ctx context.Context, kind, selector string) {
 				totals = capTrafficTotals(totals, latest)
 			}
 		}
-		_ = b.send(ctx, formatTrafficCard(client, totals, totalLabel), nil)
+		_ = b.sendEphemeral(ctx, formatTrafficCard(client, totals, totalLabel), nil)
 	}
 }
 
 func (b *bot) sendCycle(ctx context.Context, selector string) {
 	list, err := selectClients(selector)
 	if err != nil {
-		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		_ = b.sendEphemeral(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
 	now := time.Now().In(b.location)
 	for _, client := range list {
 		if totals, ok := notifier.GetClientVnstatCycleTotals(client, now); ok {
-			_ = b.send(ctx, formatTrafficCard(client, totals, "周期"), nil)
+			_ = b.sendEphemeral(ctx, formatTrafficCard(client, totals, "周期"), nil)
 			continue
 		}
 		b.sendCumulative(ctx, client.UUID, "周期")
@@ -726,7 +764,7 @@ func (b *bot) sendTotal(ctx context.Context, selector string) {
 func (b *bot) sendAllTotal(ctx context.Context) {
 	list, err := clients.GetAllClientBasicInfo()
 	if err != nil {
-		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		_ = b.sendEphemeral(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
 	sortClients(list)
@@ -748,13 +786,13 @@ func (b *bot) sendAllTotal(ctx context.Context) {
 			down += totals.Down
 		}
 	}
-	_ = b.send(ctx, formatAllTrafficCard(len(list), up, down), nil)
+	_ = b.sendEphemeral(ctx, formatAllTrafficCard(len(list), up, down), nil)
 }
 
 func (b *bot) sendCumulative(ctx context.Context, selector, totalLabel string) {
 	list, err := selectClients(selector)
 	if err != nil {
-		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		_ = b.sendEphemeral(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
 	latest := agent_runtime.GetLatestReport()
@@ -762,7 +800,7 @@ func (b *bot) sendCumulative(ctx context.Context, selector, totalLabel string) {
 		totals := notifier.TrafficTotals{}
 		if totalLabel == "累计" {
 			if vnstatTotals, ok := notifier.GetClientVnstatLatestTotals(client); ok {
-				_ = b.send(ctx, formatTrafficCard(client, vnstatTotals, totalLabel), nil)
+				_ = b.sendEphemeral(ctx, formatTrafficCard(client, vnstatTotals, totalLabel), nil)
 				continue
 			}
 		}
@@ -772,36 +810,36 @@ func (b *bot) sendCumulative(ctx context.Context, selector, totalLabel string) {
 		} else {
 			totals, err = notifier.GetLatestClientTrafficTotals(client.UUID)
 			if err != nil {
-				_ = b.send(ctx, formatTrafficErrorCard(client), nil)
+				_ = b.sendEphemeral(ctx, formatTrafficErrorCard(client), nil)
 				continue
 			}
 		}
-		_ = b.send(ctx, formatTrafficCard(client, totals, totalLabel), nil)
+		_ = b.sendEphemeral(ctx, formatTrafficCard(client, totals, totalLabel), nil)
 	}
 }
 
 func (b *bot) sendReset(ctx context.Context, selector string) {
 	list, err := selectClients(selector)
 	if err != nil {
-		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		_ = b.sendEphemeral(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
 	now := time.Now().In(b.location)
 	for _, client := range list {
 		status := b.resetStatusForClient(client, now)
-		_ = b.send(ctx, formatResetCard(client, status.Text), nil)
+		_ = b.sendEphemeral(ctx, formatResetCard(client, status.Text), nil)
 	}
 }
 
 func (b *bot) sendResetList(ctx context.Context) {
 	list, err := clients.GetAllClientBasicInfo()
 	if err != nil {
-		_ = b.send(ctx, "读取节点失败。", nil)
+		_ = b.sendEphemeral(ctx, "读取节点失败。", nil)
 		return
 	}
 	sortClients(list)
 	if len(list) == 0 {
-		_ = b.send(ctx, "当前没有已添加的监控节点。", nil)
+		_ = b.sendEphemeral(ctx, "当前没有已添加的监控节点。", nil)
 		return
 	}
 
@@ -821,7 +859,7 @@ func (b *bot) sendResetList(ctx context.Context) {
 		counts[resetStatusUnknown]+counts[resetStatusError],
 	)
 	for _, message := range chunkTelegramMessage(header, lines) {
-		_ = b.send(ctx, message, nil)
+		_ = b.sendEphemeral(ctx, message, nil)
 	}
 }
 
@@ -864,7 +902,7 @@ func (b *bot) resetStatusForClient(client models.Client, now time.Time) resetSta
 func (b *bot) sendRemaining(ctx context.Context, selector string) {
 	list, err := selectClients(selector)
 	if err != nil {
-		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		_ = b.sendEphemeral(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
 	reports := agent_runtime.GetLatestReport()
@@ -880,21 +918,21 @@ func (b *bot) sendRemaining(ctx context.Context, selector string) {
 		}
 		used := notifier.ComputeUsedByType(strings.ToLower(client.TrafficLimitType), totals.Up, totals.Down)
 		if client.TrafficLimit <= 0 {
-			_ = b.send(ctx, formatRemainingCard(client, used, 0, 0, true), nil)
+			_ = b.sendEphemeral(ctx, formatRemainingCard(client, used, 0, 0, true), nil)
 			continue
 		}
 		remaining := client.TrafficLimit - used
 		if remaining < 0 {
 			remaining = 0
 		}
-		_ = b.send(ctx, formatRemainingCard(client, used, remaining, client.TrafficLimit, false), nil)
+		_ = b.sendEphemeral(ctx, formatRemainingCard(client, used, remaining, client.TrafficLimit, false), nil)
 	}
 }
 
 func (b *bot) sendStatus(ctx context.Context, selector string) {
 	list, err := selectClients(selector)
 	if err != nil {
-		_ = b.send(ctx, html.EscapeString(err.Error()), nil)
+		_ = b.sendEphemeral(ctx, html.EscapeString(err.Error()), nil)
 		return
 	}
 	reports := agent_runtime.GetLatestReport()
@@ -910,7 +948,7 @@ func (b *bot) sendStatus(ctx context.Context, selector string) {
 		}
 		lines = append(lines, fmt.Sprintf("%s <b>%s</b>%s", state, html.EscapeString(displayName(client)), extra))
 	}
-	_ = b.send(ctx, strings.Join(lines, "\n"), nil)
+	_ = b.sendEphemeral(ctx, strings.Join(lines, "\n"), nil)
 }
 
 func selectClients(selector string) ([]models.Client, error) {

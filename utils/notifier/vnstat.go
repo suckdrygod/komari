@@ -39,11 +39,20 @@ func GetClientVnstatRangeTotals(client models.Client, start, end time.Time) (Tra
 	return totals, found
 }
 
-// GetClientVnstatLatestTotals returns the latest cumulative vnStat interface
-// counters reported by the agent.
+// GetClientVnstatLatestTotals returns the latest cumulative totals for a
+// client using vnStat as the live counter source. When vnStat was enabled after
+// Komari had already accumulated traffic, the baseline captured at adoption is
+// carried forward so Telegram "累计" and "剩余" cards use the same accounting
+// basis instead of showing a smaller raw vnStat-only total.
 func GetClientVnstatLatestTotals(client models.Client) (TrafficTotals, bool) {
 	if !client.VnstatAvailable || (client.VnstatTotalUp == 0 && client.VnstatTotalDown == 0) {
 		return TrafficTotals{}, false
+	}
+	if !client.VnstatBaselineAt.ToTime().IsZero() {
+		return TrafficTotals{
+			Up:   client.VnstatBaselineUp + positiveDelta(client.VnstatTotalUp, client.VnstatBaselineVnUp),
+			Down: client.VnstatBaselineDown + positiveDelta(client.VnstatTotalDown, client.VnstatBaselineVnDown),
+		}, true
 	}
 	return TrafficTotals{Up: client.VnstatTotalUp, Down: client.VnstatTotalDown}, true
 }

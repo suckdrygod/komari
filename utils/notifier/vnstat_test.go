@@ -22,6 +22,24 @@ func TestGetClientVnstatRangeTotals(t *testing.T) {
 	assert.Equal(t, TrafficTotals{Up: 300, Down: 400}, totals)
 }
 
+func TestGetClientVnstatLatestTotalsCarriesAdoptionBaseline(t *testing.T) {
+	client := models.Client{
+		VnstatAvailable:      true,
+		VnstatTotalUp:        160,
+		VnstatTotalDown:      270,
+		VnstatBaselineUp:     1000,
+		VnstatBaselineDown:   2000,
+		VnstatBaselineVnUp:   100,
+		VnstatBaselineVnDown: 200,
+		VnstatBaselineAt:     models.FromTime(time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)),
+	}
+
+	totals, ok := GetClientVnstatLatestTotals(client)
+
+	assert.True(t, ok)
+	assert.Equal(t, TrafficTotals{Up: 1060, Down: 2070}, totals)
+}
+
 func TestGetClientVnstatCycleTotalsUsesBaselineBeforeFirstReset(t *testing.T) {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	assert.NoError(t, err)

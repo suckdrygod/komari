@@ -65,6 +65,9 @@ func GetClientVnstatCycleTotals(client models.Client, now time.Time) (TrafficTot
 	if !client.VnstatAvailable {
 		return TrafficTotals{}, false
 	}
+	if client.TrafficResetDay <= 0 {
+		return GetClientVnstatLatestTotals(client)
+	}
 
 	loc := clientTrafficLocation(client)
 	now = now.In(loc)

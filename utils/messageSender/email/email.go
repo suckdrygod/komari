@@ -114,17 +114,9 @@ func (e *EmailSender) SendTextMessage(message, title string) error {
 		}
 	}
 
-	// Parse sender address (for MAIL FROM and header)
-	var senderAddr string
-	var senderHeader string
-	if addr, err := mail.ParseAddress(e.Addition.Sender); err == nil {
-		senderAddr = addr.Address
-		senderHeader = addr.String()
-	} else {
-		// Fallback: use raw string
-		senderAddr = e.Addition.Sender
-		senderHeader = e.Addition.Sender
-	}
+	// Parse sender address (for MAIL FROM and header). FromName only affects the
+	// RFC 5322 header; SMTP envelope MAIL FROM must remain a plain email address.
+	senderAddr, senderHeader := buildSenderAddress(e.Addition.Sender, e.Addition.FromName)
 
 	// Parse recipients (support comma-separated list)
 	var rcptList []string
@@ -282,6 +274,24 @@ func (e *EmailSender) SendTextMessage(message, title string) error {
 			fullMsg,
 		)
 	}
+}
+
+func buildSenderAddress(sender, fromName string) (string, string) {
+	sender = strings.TrimSpace(sender)
+	fromName = strings.TrimSpace(fromName)
+
+	if addr, err := mail.ParseAddress(sender); err == nil {
+		if fromName != "" {
+			addr.Name = fromName
+		}
+		return addr.Address, addr.String()
+	}
+
+	if fromName == "" {
+		return sender, sender
+	}
+
+	return sender, (&mail.Address{Name: fromName, Address: sender}).String()
 }
 
 // 确保实现了 IMessageSender 接口

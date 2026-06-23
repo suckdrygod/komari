@@ -23,7 +23,7 @@ import (
 	"github.com/komari-monitor/komari/database"
 	"github.com/komari-monitor/komari/database/clients"
 	"github.com/komari-monitor/komari/database/models"
-	"github.com/komari-monitor/komari/pkg/config"
+	"github.com/komari-monitor/komari/utils/messageSender"
 	telegramprovider "github.com/komari-monitor/komari/utils/messageSender/telegram"
 	"github.com/komari-monitor/komari/utils/notifier"
 	agent_runtime "github.com/komari-monitor/komari/web/agent"
@@ -100,8 +100,7 @@ type inlineKeyboard struct {
 // Reload stops the existing poller and starts one matching the active Telegram
 // provider configuration. Calling Reload repeatedly with unchanged settings is safe.
 func Reload() {
-	method, _ := config.GetAs[string](config.NotificationMethodKey, "none")
-	if method != "telegram" {
+	if !messageSender.IsProviderConfigured("telegram") {
 		stopIfRunning()
 		return
 	}

@@ -2,6 +2,7 @@ package messageSender
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -16,15 +17,29 @@ import (
 )
 
 var (
-	currentProvider factory.IMessageSender
-	mu              = sync.Mutex{}
-	once            = sync.Once{}
+	currentProvider  factory.IMessageSender
+	currentProviders []namedProvider
+	mu               = sync.Mutex{}
+	once             = sync.Once{}
 )
+
+type namedProvider struct {
+	name     string
+	provider factory.IMessageSender
+}
 
 func CurrentProvider() factory.IMessageSender {
 	mu.Lock()
 	defer mu.Unlock()
 	return currentProvider
+}
+
+func activeProviders() []namedProvider {
+	mu.Lock()
+	defer mu.Unlock()
+	providers := make([]namedProvider, len(currentProviders))
+	copy(providers, currentProviders)
+	return providers
 }
 
 func Initialize() {
@@ -52,24 +67,115 @@ func Initialize() {
 			}
 		})
 	}()
-	NotificationMethod, _ := config.GetAs[string](config.NotificationMethodKey, "none")
 
-	if NotificationMethod == "" || NotificationMethod == "none" {
-		LoadProvider("empty", "{}")
-		return
+	names := ConfiguredProviderNames()
+	providers := make([]namedProvider, 0, len(names))
+	for _, name := range names {
+		senderConfig, err := database.GetMessageSenderConfigByName(name)
+		if err != nil {
+			log.Printf("Message sender provider %s is not configured: %v", name, err)
+			continue
+		}
+		provider, err := loadProviderInstance(name, senderConfig.Addition)
+		if err != nil {
+			log.Printf("Failed to load message sender provider %s: %v", name, err)
+			continue
+		}
+		providers = append(providers, namedProvider{name: name, provider: provider})
 	}
 
-	// 尝试从数据库加载配置
-	senderConfig, err := database.GetMessageSenderConfigByName(NotificationMethod)
+	replaceCurrentProviders(providers)
+}
+
+func replaceCurrentProviders(providers []namedProvider) {
+	mu.Lock()
+	defer mu.Unlock()
+	for _, existing := range currentProviders {
+		if existing.provider != nil {
+			_ = existing.provider.Destroy()
+		}
+	}
+	if len(currentProviders) == 0 && currentProvider != nil {
+		_ = currentProvider.Destroy()
+	}
+	currentProviders = providers
+	if len(providers) > 0 {
+		currentProvider = providers[0].provider
+		return
+	}
+	empty, err := loadProviderInstance("empty", "{}")
 	if err != nil {
-		// 如果没有找到配置，使用empty provider
-		LoadProvider("empty", "{}")
+		currentProvider = nil
 		return
 	}
-	LoadProvider(NotificationMethod, senderConfig.Addition)
+	currentProvider = empty
+}
+
+func ConfiguredProviderNames() []string {
+	raw, err := config.Get(config.NotificationMethodsKey)
+	if err == nil {
+		return providerNamesFromValue(raw)
+	}
+	method, _ := config.GetAs[string](config.NotificationMethodKey, "none")
+	return providerNamesFromValue(method)
+}
+
+func IsProviderConfigured(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" || name == "none" {
+		return false
+	}
+	for _, providerName := range ConfiguredProviderNames() {
+		if providerName == name {
+			return true
+		}
+	}
+	return false
+}
+
+func providerNamesFromValue(raw any) []string {
+	var values []string
+	switch v := raw.(type) {
+	case []string:
+		values = append(values, v...)
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				values = append(values, s)
+			}
+		}
+	case string:
+		text := strings.TrimSpace(v)
+		if text == "" {
+			break
+		}
+		if strings.HasPrefix(text, "[") {
+			var parsed []string
+			if err := json.Unmarshal([]byte(text), &parsed); err == nil {
+				values = append(values, parsed...)
+				break
+			}
+		}
+		values = append(values, strings.Split(text, ",")...)
+	}
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if value == "" || value == "none" || seen[value] {
+			continue
+		}
+		if _, ok := factory.GetConstructor(value); !ok {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 func SendTextMessage(message string, title string) error {
+	providers := activeProviders()
 	if CurrentProvider() == nil {
 		return fmt.Errorf("message sender provider is not initialized")
 	}
@@ -81,17 +187,14 @@ func SendTextMessage(message string, title string) error {
 	if !NotificationEnabled {
 		return nil
 	}
-	for i := 0; i < 3; i++ {
-		err = CurrentProvider().SendTextMessage(message, title)
-		if err == nil {
-			auditlog.Log("", "", "Message sent: "+title, "info")
-			return nil
-		}
+	if len(providers) == 0 {
+		return nil
 	}
-	auditlog.Log("", "", "Failed to send message after 3 attempts: "+err.Error()+","+title, "error")
-	return err
+	return sendTextMessageToProviders(providers, message, title, auditlog.Log)
 }
+
 func SendEvent(event models.EventMessage) error {
+	providers := activeProviders()
 	if CurrentProvider() == nil {
 		return fmt.Errorf("message sender provider is not initialized")
 	}
@@ -106,49 +209,185 @@ func SendEvent(event models.EventMessage) error {
 	if !cfg[config.NotificationEnabledKey].(bool) {
 		return nil
 	}
-
-	// 检查提供者是否实现了 IEventMessageSender 接口
-	if eventSender, ok := CurrentProvider().(factory.IEventMessageSender); ok {
-		// 如果实现了,直接调用 SendEvent
-		for i := 0; i < 3; i++ {
-			err = eventSender.SendEvent(event)
-			if err == nil || err.Error() == "short response: \x00\x00\x00\x1a\x00\x00\x00" {
-				auditlog.Log("", "", "Event message sent: "+event.Event, "info")
-				return nil
-			}
-		}
-		auditlog.Log("", "", "Failed to send event message after 3 attempts: "+err.Error()+","+event.Event, "error")
-		return err
+	if len(providers) == 0 {
+		return nil
 	}
-
-	// 如果没有实现,使用模板格式化为文本消息
 	messageTemplate := cfg[config.NotificationTemplateKey].(string)
+	return sendEventToProviders(providers, event, messageTemplate, auditlog.Log)
+}
 
-	messageTemplate = parseTemplate(messageTemplate, event)
+type auditLogger func(ip, uuid, message, msgType string)
 
+func sendTextMessageToProviders(providers []namedProvider, message, title string, audit auditLogger) error {
+	var errs []error
+	success := false
+	for _, provider := range providers {
+		if provider.provider == nil {
+			continue
+		}
+		err := sendTextMessageToProvider(provider.provider, message, title)
+		if err == nil {
+			success = true
+			if audit != nil {
+				audit("", "", "Message sent via "+provider.name+": "+title, "info")
+			}
+			continue
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", provider.name, err))
+		if audit != nil {
+			audit("", "", "Failed to send message via "+provider.name+" after 3 attempts: "+err.Error()+","+title, "error")
+		}
+	}
+	if success {
+		return nil
+	}
+	return errors.Join(errs...)
+}
+
+func sendEventToProviders(providers []namedProvider, event models.EventMessage, messageTemplate string, audit auditLogger) error {
+	var errs []error
+	success := false
+	for _, provider := range providers {
+		if provider.provider == nil {
+			continue
+		}
+		err := sendEventToProvider(provider.provider, event, messageTemplate)
+		if err == nil {
+			success = true
+			if audit != nil {
+				audit("", "", "Event message sent via "+provider.name+": "+event.Event, "info")
+			}
+			continue
+		}
+		errs = append(errs, fmt.Errorf("%s: %w", provider.name, err))
+		if audit != nil {
+			audit("", "", "Failed to send event message via "+provider.name+" after 3 attempts: "+err.Error()+","+event.Event, "error")
+		}
+	}
+	if success {
+		return nil
+	}
+	return errors.Join(errs...)
+}
+
+func sendTextMessageToProvider(provider factory.IMessageSender, message, title string) error {
+	var err error
 	for i := 0; i < 3; i++ {
-		err = CurrentProvider().SendTextMessage(messageTemplate, event.Event)
-		if err == nil || err.Error() == "short response: \x00\x00\x00\x1a\x00\x00\x00" { // QQ 会返回这个错误，但实际上消息是发送成功的
-			auditlog.Log("", "", "Event message sent: "+event.Event, "info")
+		err = provider.SendTextMessage(message, title)
+		if isSuccessfulSendError(err) {
 			return nil
 		}
 	}
-	auditlog.Log("", "", "Failed to send event message after 3 attempts: "+err.Error()+","+event.Event, "error")
 	return err
 }
 
-func parseTemplate(messageTemplate string, event models.EventMessage) string {
-	// Aggregate client names. If Name is empty, fall back to UUID.
+func sendEventToProvider(provider factory.IMessageSender, event models.EventMessage, messageTemplate string) error {
+	if eventSender, ok := provider.(factory.IEventMessageSender); ok {
+		var err error
+		for i := 0; i < 3; i++ {
+			err = eventSender.SendEvent(event)
+			if isSuccessfulSendError(err) {
+				return nil
+			}
+		}
+		return err
+	}
+	return sendTextMessageToProvider(provider, formatEventMessage(messageTemplate, event), event.Event)
+}
+
+func isSuccessfulSendError(err error) bool {
+	return err == nil || err.Error() == "short response: \x00\x00\x00\x1a\x00\x00\x00"
+}
+
+func formatEventMessage(messageTemplate string, event models.EventMessage) string {
+	if isolated, ok := isolatedEventTemplate(event); ok {
+		return isolated
+	}
+	return parseTemplate(messageTemplate, event)
+}
+
+func isolatedEventTemplate(event models.EventMessage) (string, bool) {
+	clientText := eventClientText(event)
+	timeText := formatEventTime(event.Time)
+
+	switch event.Event {
+	case "SSH 登录成功":
+		return strings.Join([]string{
+			"🔐 SSH 安全登录提醒",
+			"━━━━━━━━━━━━━━",
+			"🖥️ 节点名称：" + clientText,
+			"📌 登录事件：SSH 登录成功",
+			"",
+			event.Message,
+			"",
+			"━━━━━━━━━━━━━━",
+			"✅ SSH 会话已成功建立",
+			"⚠️ 若非本人操作，请立即检查 SSH 密钥、用户权限与登录日志。",
+		}, "\n"), true
+	case "SSH 爆破告警":
+		return strings.Join([]string{
+			"🚨 SSH 爆破告警",
+			"━━━━━━━━━━━━━━",
+			event.Message,
+		}, "\n"), true
+	case "Offline":
+		return strings.Join([]string{
+			"🔴 机器离线告警",
+			"━━━━━━━━━━━━━━",
+			"🖥️ 节点名称：" + clientText,
+			"📌 事件类型：Offline",
+			"📝 详细说明：" + event.Message,
+			"🕒 时间：" + timeText,
+		}, "\n"), true
+	case "Online":
+		return strings.Join([]string{
+			"🟢 机器恢复通知",
+			"━━━━━━━━━━━━━━",
+			"🖥️ 节点名称：" + clientText,
+			"📌 事件类型：Online",
+			"📝 详细说明：" + event.Message,
+			"🕒 时间：" + timeText,
+		}, "\n"), true
+	case "Test":
+		return strings.Join([]string{
+			"🧪 Test",
+			"━━━━━━━━━━━━━━",
+			"📌 事件类型：Test",
+			"📝 详细说明：" + event.Message,
+			"🕒 时间：" + timeText,
+		}, "\n"), true
+	default:
+		return "", false
+	}
+}
+
+func eventClientText(event models.EventMessage) string {
 	clientNames := make([]string, 0, len(event.Clients))
 	for _, c := range event.Clients {
 		name := c.Name
 		if strings.TrimSpace(name) == "" {
-			// fallback to UUID when name is not set
 			name = c.UUID
 		}
-		clientNames = append(clientNames, name)
+		if strings.TrimSpace(name) != "" {
+			clientNames = append(clientNames, name)
+		}
 	}
-	joinedClients := strings.Join(clientNames, ", ")
+	if len(clientNames) == 0 {
+		return "-"
+	}
+	return strings.Join(clientNames, ", ")
+}
+
+func formatEventTime(t time.Time) string {
+	if t.IsZero() {
+		t = time.Now()
+	}
+	return t.Format(time.RFC3339)
+}
+
+func parseTemplate(messageTemplate string, event models.EventMessage) string {
+	// Aggregate client names. If Name is empty, fall back to UUID.
+	joinedClients := eventClientText(event)
 
 	replaceMap := map[string]string{
 		"{{event}}":   event.Event,

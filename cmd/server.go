@@ -131,7 +131,7 @@ func RunServer() {
 			go geoip.InitGeoIp()
 		}
 
-		if event.IsChanged(config.NotificationMethodKey) {
+		if event.IsChanged(config.NotificationMethodKey) || event.IsChanged(config.NotificationMethodsKey) {
 			go messageSender.Initialize()
 			go telegrambot.Reload()
 		}

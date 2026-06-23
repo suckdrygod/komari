@@ -128,8 +128,7 @@ func sendTrafficReport(daily, weekly, monthly bool) {
 		clientMap[c.UUID] = c
 	}
 
-	method, _ := config.GetAs[string](config.NotificationMethodKey, "none")
-	compactTelegram := method == "telegram"
+	compactTelegram := messageSender.IsProviderConfigured("telegram")
 
 	// 为每个服务器统计流量并拼接消息。Telegram 使用逐机器紧凑卡片；
 	// 其它通知提供方保留原有聚合事件格式。

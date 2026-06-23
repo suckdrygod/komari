@@ -3,6 +3,7 @@ package messageSender
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/komari-monitor/komari/utils/messageSender/factory"
 )
@@ -10,22 +11,38 @@ import (
 func LoadProvider(name string, addition string) error {
 	mu.Lock()
 	defer mu.Unlock()
+	provider, err := loadProviderInstance(name, addition)
+	if err != nil {
+		return err
+	}
+	for _, existing := range currentProviders {
+		if existing.provider != nil {
+			_ = existing.provider.Destroy()
+		}
+	}
+	if len(currentProviders) == 0 && currentProvider != nil {
+		_ = currentProvider.Destroy()
+	}
+	currentProvider = provider
+	currentProviders = []namedProvider{{name: strings.ToLower(strings.TrimSpace(name)), provider: provider}}
+	return nil
+}
+
+func loadProviderInstance(name string, addition string) (factory.IMessageSender, error) {
 	constructor, exists := factory.GetConstructor(name)
 	if !exists {
-		return fmt.Errorf("message sender provider not found: %s", name)
+		return nil, fmt.Errorf("message sender provider not found: %s", name)
 	}
 
 	provider := constructor()
 	err := json.Unmarshal([]byte(addition), provider.GetConfiguration())
 	if err != nil {
-		return fmt.Errorf("failed to load config for provider %s: %w", name, err)
+		return nil, fmt.Errorf("failed to load config for provider %s: %w", name, err)
 	}
-	provider.Init()
-	if currentProvider != nil {
-		currentProvider.Destroy()
+	if err := provider.Init(); err != nil {
+		return nil, err
 	}
-	currentProvider = provider
-	return nil
+	return provider, nil
 }
 
 func GetProviderConfiguration(name string) (map[string]interface{}, error) {

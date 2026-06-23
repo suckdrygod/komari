@@ -35,8 +35,7 @@ func CheckTrafficResetReminderScheduledWork(ctx context.Context, now time.Time) 
 	if err != nil || !enabled {
 		return
 	}
-	method, _ := config.GetAs[string](config.NotificationMethodKey, "none")
-	if method != "telegram" {
+	if !messageSender.IsProviderConfigured("telegram") {
 		return
 	}
 

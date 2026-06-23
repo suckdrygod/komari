@@ -93,8 +93,7 @@ func CheckTraffic() {
 
 		if curStep > lastStep { // 只在进入新步进时提醒一次
 			trafficCache.SetDefault(key, curStep)
-			method, _ := config.GetAs[string](config.NotificationMethodKey, "none")
-			if method == "telegram" {
+			if messageSender.IsProviderConfigured("telegram") {
 				name := c.Name
 				if strings.TrimSpace(name) == "" {
 					name = c.UUID

@@ -33,13 +33,14 @@ type Settings struct {
 	CustomHead string `json:"custom_head" default:""`
 	CustomBody string `json:"custom_body" default:""`
 	// 通知
-	NotificationEnabled        bool    `json:"notification_enabled" default:"true"` // 通知总开关
-	NotificationMethod         string  `json:"notification_method" default:"none"`
-	NotificationTemplate       string  `json:"notification_template" default:"{{emoji}}{{emoji}}{{emoji}}\nEvent: {{event}}\nClients: {{client}}\nMessage: {{message}}\nTime: {{time}}"`
-	ExpireNotificationEnabled  bool    `json:"expire_notification_enabled" default:"true"` // 是否启用过期通知
-	ExpireNotificationLeadDays int     `json:"expire_notification_lead_days" default:"7"`  // 过期前多少天通知，默认7天
-	LoginNotification          bool    `json:"login_notification" default:"true"`          // 登录通知
-	TrafficLimitPercentage     float64 `json:"traffic_limit_percentage" default:"80.00"`   // 流量限制百分比，默认80.00%
+	NotificationEnabled        bool     `json:"notification_enabled" default:"true"` // 通知总开关
+	NotificationMethod         string   `json:"notification_method" default:"none"`
+	NotificationMethods        []string `json:"notification_methods"` // 多通知通道；未设置时兼容 notification_method
+	NotificationTemplate       string   `json:"notification_template" default:"{{emoji}}{{emoji}}{{emoji}}\nEvent: {{event}}\nClients: {{client}}\nMessage: {{message}}\nTime: {{time}}"`
+	ExpireNotificationEnabled  bool     `json:"expire_notification_enabled" default:"true"` // 是否启用过期通知
+	ExpireNotificationLeadDays int      `json:"expire_notification_lead_days" default:"7"`  // 过期前多少天通知，默认7天
+	LoginNotification          bool     `json:"login_notification" default:"true"`          // 登录通知
+	TrafficLimitPercentage     float64  `json:"traffic_limit_percentage" default:"80.00"`   // 流量限制百分比，默认80.00%
 	// Record
 	RecordEnabled          bool `json:"record_enabled" default:"true"`          // 是否启用记录功能
 	RecordPreserveTime     int  `json:"record_preserve_time" default:"720"`     // 记录保留时间，单位小时，默认30天
@@ -74,6 +75,7 @@ const (
 	CustomBodyKey                 = "custom_body"
 	NotificationEnabledKey        = "notification_enabled"
 	NotificationMethodKey         = "notification_method"
+	NotificationMethodsKey        = "notification_methods"
 	NotificationTemplateKey       = "notification_template"
 	ExpireNotificationEnabledKey  = "expire_notification_enabled"
 	ExpireNotificationLeadDaysKey = "expire_notification_lead_days"

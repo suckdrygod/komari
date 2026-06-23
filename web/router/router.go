@@ -67,6 +67,7 @@ func registerAgentRoutes(r *gin.Engine) {
 		tokenAuthorized.GET("/report", client.WebSocketReport)
 		tokenAuthorized.POST("/uploadBasicInfo", client.UploadBasicInfo)
 		tokenAuthorized.POST("/report", client.UploadReport)
+		tokenAuthorized.POST("/ssh-auth-guard", client.UploadSSHAuthGuardAlert)
 		tokenAuthorized.GET("/v2/rpc", client.WebSocketV2RPC)
 		tokenAuthorized.POST("/v2/rpc", client.UploadV2RPC)
 		tokenAuthorized.GET("/terminal", terminal.EstablishConnection)

@@ -9,9 +9,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/komari-monitor/komari/database/clients"
 	"github.com/komari-monitor/komari/database/models"
 	messageevent "github.com/komari-monitor/komari/database/models/messageEvent"
+	"github.com/komari-monitor/komari/database/sshlogin"
 	v2 "github.com/komari-monitor/komari/protocol/v2"
 	"github.com/komari-monitor/komari/utils/messageSender"
 	cache "github.com/patrickmn/go-cache"
@@ -66,6 +68,30 @@ func NotifySSHLogin(clientUUID string, params v2.SSHLoginParams) error {
 	client, err := clients.GetClientByUUID(clientUUID)
 	if err != nil {
 		return err
+	}
+	notificationConfig, err := sshlogin.GetNotification(clientUUID)
+	if err != nil {
+		return err
+	}
+	if !notificationConfig.Enable {
+		return nil
+	}
+	whitelisted := notificationConfig.IsIPWhitelisted(params.RemoteIP)
+	if err := sshlogin.CreateEvent(models.SSHLoginEvent{
+		ID:          uuid.New().String(),
+		Client:      clientUUID,
+		User:        params.User,
+		RemoteIP:    params.RemoteIP,
+		RemotePort:  params.RemotePort,
+		AuthMethod:  params.AuthMethod,
+		OccurredAt:  models.FromTime(occurredAt),
+		CreatedAt:   models.Now(),
+		Whitelisted: whitelisted,
+	}); err != nil {
+		return err
+	}
+	if whitelisted {
+		return nil
 	}
 	event := models.EventMessage{
 		Event:   messageevent.Login,

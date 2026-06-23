@@ -211,6 +211,15 @@ func registerAdminRoutes(r *gin.Engine) {
 			trafficReport.POST("/enable", jsonRpc.Bind("admin:enableTrafficReportNotifications"))
 			trafficReport.POST("/disable", jsonRpc.Bind("admin:disableTrafficReportNotifications"))
 		}
+		sshLogin := notificationGroup.Group("/ssh-login")
+		{
+			sshLogin.GET("/", jsonRpc.Bind("admin:listSSHLoginNotifications"))
+			sshLogin.POST("/edit", jsonRpc.Bind("admin:editSSHLoginNotifications"))
+			sshLogin.POST("/enable", jsonRpc.Bind("admin:enableSSHLoginNotifications"))
+			sshLogin.POST("/disable", jsonRpc.Bind("admin:disableSSHLoginNotifications"))
+			sshLogin.GET("/events", jsonRpc.Bind("admin:listSSHLoginEvents", jsonRpc.WithQuery("client", "limit")))
+			sshLogin.POST("/events/delete", jsonRpc.Bind("admin:deleteSSHLoginEvents"))
+		}
 	}
 
 	// ping tasks

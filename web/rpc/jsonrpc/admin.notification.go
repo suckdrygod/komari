@@ -2,10 +2,12 @@ package jsonrpc
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/models"
 	"github.com/komari-monitor/komari/database/notification"
+	"github.com/komari-monitor/komari/database/sshlogin"
 	"github.com/komari-monitor/komari/pkg/rpc"
 	"gorm.io/gorm/clause"
 )
@@ -29,6 +31,13 @@ func init() {
 	reg("editTrafficReportNotifications", adminEditTrafficReport, "Edit traffic report notifications")
 	reg("enableTrafficReportNotifications", adminEnableTrafficReport, "Enable traffic report notifications")
 	reg("disableTrafficReportNotifications", adminDisableTrafficReport, "Disable traffic report notifications")
+	// SSH login notifications
+	reg("listSSHLoginNotifications", adminListSSHLoginNotifications, "List SSH login notification settings")
+	reg("editSSHLoginNotifications", adminEditSSHLoginNotifications, "Edit SSH login notification settings")
+	reg("enableSSHLoginNotifications", adminEnableSSHLoginNotifications, "Enable SSH login notifications")
+	reg("disableSSHLoginNotifications", adminDisableSSHLoginNotifications, "Disable SSH login notifications")
+	reg("listSSHLoginEvents", adminListSSHLoginEvents, "List SSH login events")
+	reg("deleteSSHLoginEvents", adminDeleteSSHLoginEvents, "Delete SSH login events")
 }
 
 // reg 是 admin 命名空间方法的注册便捷封装。
@@ -212,6 +221,79 @@ func adminDisableTrafficReport(_ context.Context, req *rpc.JsonRpcRequest) (any,
 	}
 	if err := notification.DisableTrafficReportNotifications(uuids); err != nil {
 		return nil, rpc.MakeError(rpc.InternalError, "Failed to disable traffic report notifications: "+err.Error(), nil)
+	}
+	return nil, nil
+}
+
+func adminListSSHLoginNotifications(_ context.Context, _ *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	list, err := sshlogin.ListNotifications()
+	if err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to list SSH login notifications: "+err.Error(), nil)
+	}
+	return list, nil
+}
+
+func adminEditSSHLoginNotifications(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var notifications []models.SSHLoginNotification
+	if err := req.BindParams(&notifications); err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, "Invalid request body: "+err.Error(), nil)
+	}
+	if err := sshlogin.EditNotifications(notifications); err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, err.Error(), nil)
+	}
+	return nil, nil
+}
+
+func adminEnableSSHLoginNotifications(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var uuids []string
+	if err := req.BindParams(&uuids); err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, "Invalid request body: "+err.Error(), nil)
+	}
+	if err := sshlogin.SetNotificationEnable(uuids, true); err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to enable SSH login notifications: "+err.Error(), nil)
+	}
+	return nil, nil
+}
+
+func adminDisableSSHLoginNotifications(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var uuids []string
+	if err := req.BindParams(&uuids); err != nil {
+		return nil, rpc.MakeError(rpc.InvalidParams, "Invalid request body: "+err.Error(), nil)
+	}
+	if err := sshlogin.SetNotificationEnable(uuids, false); err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to disable SSH login notifications: "+err.Error(), nil)
+	}
+	return nil, nil
+}
+
+func adminListSSHLoginEvents(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var params struct {
+		Client string `json:"client"`
+		Limit  string `json:"limit"`
+	}
+	_ = req.BindParams(&params)
+	limit := 100
+	if params.Limit != "" {
+		parsed, err := strconv.Atoi(params.Limit)
+		if err != nil {
+			return nil, rpc.MakeError(rpc.InvalidParams, "Invalid limit", nil)
+		}
+		limit = parsed
+	}
+	events, err := sshlogin.ListEvents(params.Client, limit)
+	if err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to list SSH login events: "+err.Error(), nil)
+	}
+	return events, nil
+}
+
+func adminDeleteSSHLoginEvents(_ context.Context, req *rpc.JsonRpcRequest) (any, *rpc.JsonRpcError) {
+	var params struct {
+		Client string `json:"client"`
+	}
+	_ = req.BindParams(&params)
+	if err := sshlogin.DeleteEvents(params.Client); err != nil {
+		return nil, rpc.MakeError(rpc.InternalError, "Failed to delete SSH login events: "+err.Error(), nil)
 	}
 	return nil, nil
 }

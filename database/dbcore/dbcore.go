@@ -259,6 +259,8 @@ func GetDBInstance() *gorm.DB {
 			&models.OfflineNotification{},
 			&models.TrafficReportNotification{},
 			&models.TrafficResetReminder{},
+			&models.SSHLoginNotification{},
+			&models.SSHLoginEvent{},
 			&models.PingRecord{},
 			&models.PingTask{},
 			&models.OidcProvider{},

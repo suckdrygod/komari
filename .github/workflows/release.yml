@@ -68,7 +68,7 @@ jobs:
 
       - name: Clone and build frontend
         run: |
-          git clone https://github.com/komari-monitor/komari-web komari-web
+          git clone https://github.com/suckdrygod/komari-web komari-web
           cd komari-web
           npm install
           npm run build

@@ -519,7 +519,7 @@ input{border:1px solid var(--line);background:var(--card);color:var(--text);bord
       <h2>SSH 攻击列表</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>source_ip</th><th>user</th><th>failed_count</th><th>client</th><th>method</th><th>timestamp</th><th>risk</th><th>status</th><th>操作</th></tr></thead>
+          <thead><tr><th>来源 IP</th><th>目标用户</th><th>失败次数</th><th>节点</th><th>认证方式</th><th>时间</th><th>风险</th><th>状态</th><th>操作</th></tr></thead>
           <tbody id="attacks"><tr><td colspan="9" class="muted">加载中...</td></tr></tbody>
         </table>
       </div>
@@ -531,7 +531,17 @@ input{border:1px solid var(--line);background:var(--card);color:var(--text);bord
   </div>
 </div>
 <script>
-const statusText = {active:'active', banned:'banned', whitelisted:'whitelisted'};
+const statusText = {active:'活跃', banned:'已标记封禁', whitelisted:'白名单'};
+const riskText = {low:'低', medium:'中', high:'高'};
+const eventTypeText = {
+  SSHAuthGuardAlert:'SSH 爆破告警',
+  SSHAuthGuardSuppressed:'SSH 爆破降噪',
+  Offline:'节点离线',
+  Online:'节点恢复',
+  'SSH 爆破告警SendFailed':'SSH 爆破告警发送失败',
+  OfflineSendFailed:'离线通知发送失败',
+  OnlineSendFailed:'恢复通知发送失败',
+};
 function esc(s){return String(s ?? '').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 async function apiFetch(url, opts={}){
   const res = await fetch(url, {credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...opts});
@@ -551,12 +561,12 @@ async function reloadAttacks(){
       '<td>'+esc(a.client)+'</td>'+
       '<td>'+esc(a.method)+'</td>'+
       '<td class="mono">'+esc(a.timestamp)+'</td>'+
-      '<td><span class="tag '+esc(a.risk)+'">'+esc(a.risk)+'</span></td>'+
+      '<td><span class="tag '+esc(a.risk)+'">'+esc(riskText[a.risk]||a.risk)+'</span></td>'+
       '<td><span class="tag status-'+esc(a.status)+'">'+esc(statusText[a.status]||a.status)+'</span></td>'+
       '<td><div class="actions">'+
-        '<button class="danger" onclick='+"'"+'act("ban", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>ban</button>'+
-        '<button class="secondary" onclick='+"'"+'act("unban", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>unban</button>'+
-        '<button class="good" onclick='+"'"+'act("whitelist", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>whitelist</button>'+
+        '<button class="danger" onclick='+"'"+'act("ban", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>标记封禁</button>'+
+        '<button class="secondary" onclick='+"'"+'act("unban", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>解除标记</button>'+
+        '<button class="good" onclick='+"'"+'act("whitelist", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>加入白名单</button>'+
       '</div></td>'+
     '</tr>').join('') : '<tr><td colspan="9" class="muted">暂无 SSH 攻击事件</td></tr>';
 }
@@ -566,14 +576,15 @@ async function reloadEvents(){
   const rows = data.events || [];
   box.innerHTML = rows.length ? rows.map(e =>
     '<div class="event">'+
-      '<div class="event-top"><strong>'+esc(e.type)+'</strong><span class="mono muted">'+esc(e.timestamp)+'</span></div>'+
-      '<div>'+(e.client ? 'client：'+esc(e.client)+' · ' : '')+(e.source_ip ? 'ip：<span class="mono">'+esc(e.source_ip)+'</span> · ' : '')+(e.risk ? '<span class="tag '+esc(e.risk)+'">'+esc(e.risk)+'</span>' : '')+'</div>'+
+      '<div class="event-top"><strong>'+esc(eventTypeText[e.type]||e.type)+'</strong><span class="mono muted">'+esc(e.timestamp)+'</span></div>'+
+      '<div>'+(e.client ? '节点：'+esc(e.client)+' · ' : '')+(e.source_ip ? '来源 IP：<span class="mono">'+esc(e.source_ip)+'</span> · ' : '')+(e.risk ? '<span class="tag '+esc(e.risk)+'">'+esc(riskText[e.risk]||e.risk)+'</span>' : '')+'</div>'+
       '<div class="muted">'+esc(e.message)+'</div>'+
     '</div>').join('') : '<div class="muted">暂无事件</div>';
 }
 async function act(action, ip, client){
   if(action === 'whitelist' && !client){ alert('旧日志无法定位唯一 client，不能自动加入白名单'); return; }
-  if(!confirm(action+' '+ip+' ?')) return;
+  const actionText = {ban:'标记封禁', unban:'解除标记', whitelist:'加入白名单'}[action] || action;
+  if(!confirm(actionText+' '+ip+' ?')) return;
   await apiFetch('/api/security/'+action, {method:'POST', body:JSON.stringify({ip, client})});
   await reloadAll();
 }

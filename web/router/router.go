@@ -54,6 +54,7 @@ func registerPublicRoutes(r *gin.Engine) {
 	r.GET("/api/oauth", public_api.OAuth)
 	r.GET("/api/oauth_callback", public_api.OAuthCallback)
 	r.GET("/api/mjpeg_live", public_api.MjpegLiveHandler)
+	r.POST("/api/public/theme-mode", public_api.UpdateThemeMode)
 	// /api/clients 是 WebSocket 端点（客户端发 "get"/"get <uuid>" 拉取在线列表与最新上报），
 	// 非 JSON-RPC，保留为 WS handler。
 	r.GET("/api/clients", api.GetClients)

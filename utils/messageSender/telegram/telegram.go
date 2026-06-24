@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"net/http"
 	"net/url"
 
@@ -33,9 +34,9 @@ func (t *TelegramSender) Destroy() error {
 }
 
 func (t *TelegramSender) SendTextMessage(message, title string) error {
-	fullMessage := message
+	fullMessage := html.EscapeString(message)
 	if title != "" {
-		fullMessage = fmt.Sprintf("<b>%s</b>\n%s", title, message)
+		fullMessage = fmt.Sprintf("<b>%s</b>\n%s", html.EscapeString(title), fullMessage)
 	}
 
 	if fullMessage == "" {

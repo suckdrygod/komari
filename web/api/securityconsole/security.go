@@ -555,7 +555,7 @@ body{margin:0;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,
 h1{font-size:22px;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:4px}.grid{display:grid;grid-template-columns:1fr;gap:14px}
 .overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.metric{background:linear-gradient(180deg,var(--card),rgba(255,255,255,.72));border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:var(--shadow);position:relative;overflow:hidden}.metric:after{content:"";position:absolute;right:-28px;top:-28px;width:90px;height:90px;border-radius:999px;background:rgba(97,87,232,.07)}.metric .label{color:var(--muted);font-size:13px;font-weight:700}.metric .value{font-size:28px;font-weight:850;margin-top:8px}.metric.red{border-color:rgba(216,59,59,.22)}.metric.red .value{color:var(--red)}.metric.orange .value{color:var(--orange)}.metric.gray .value{color:var(--muted)}.metric.blue .value{color:var(--blue)}
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:var(--shadow)}
-.card h2{font-size:16px;margin:0 0 12px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.card h2{font-size:16px;margin:0 0 12px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.section-head{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;margin-bottom:12px}.section-head h2{margin:0 0 4px}.hint{color:var(--muted);font-size:12px}.filterbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.filter-input{min-width:260px}
 button{border:0;border-radius:10px;background:var(--purple);color:white;padding:8px 11px;font-weight:650;cursor:pointer;transition:transform .15s ease,opacity .15s ease,box-shadow .15s ease}button:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(20,28,45,.12)}
 button.secondary{background:#8c96a8}button.danger{background:var(--red)}button.good{background:var(--green)}
 input{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:9px 10px;min-width:220px}
@@ -567,7 +567,7 @@ input{border:1px solid var(--line);background:var(--card);color:var(--text);bord
 .events{display:flex;flex-direction:column;gap:8px}.event{border:1px solid var(--line);border-radius:12px;padding:10px}.event-top{display:flex;justify-content:space-between;gap:8px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.muted{color:var(--muted)}.err{color:var(--red);margin-bottom:10px}
 .drawer-mask{position:fixed;inset:0;background:rgba(8,12,20,.42);display:none;z-index:20}.drawer{position:fixed;right:0;top:0;height:100vh;width:min(520px,92vw);background:var(--card);border-left:1px solid var(--line);box-shadow:-18px 0 40px rgba(0,0,0,.22);transform:translateX(102%);transition:transform .22s ease;z-index:21;overflow:auto}.drawer.open{transform:translateX(0)}.drawer-mask.open{display:block}.drawer-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:18px;border-bottom:1px solid var(--line)}.drawer-body{padding:16px;display:grid;gap:14px}.kv{display:grid;grid-template-columns:120px 1fr;gap:8px;font-size:13px}.mini-card{border:1px solid var(--line);border-radius:14px;padding:12px}.timeline{display:grid;gap:8px}.timeline-item{border-left:3px solid var(--blue);padding-left:10px}.chart{width:100%;height:120px}.close{background:#8c96a8}.nowrap{white-space:nowrap}
 @media (max-width:900px){.overview{grid-template-columns:repeat(2,minmax(0,1fr))}.stream-top{align-items:flex-start;flex-direction:column}}
-@media (max-width:720px){.wrap{padding:12px}.top{align-items:flex-start;flex-direction:column}h1{font-size:20px}.card{padding:12px}.overview{grid-template-columns:1fr}input{width:100%;min-width:0}.toolbar button{flex:1}.event-top{flex-direction:column}.kv{grid-template-columns:92px 1fr}.metric .value{font-size:24px}}
+@media (max-width:720px){.wrap{padding:12px}.top{align-items:flex-start;flex-direction:column}h1{font-size:20px}.card{padding:12px}.overview{grid-template-columns:1fr}input{width:100%;min-width:0}.toolbar button{flex:1}.section-head{flex-direction:column}.filterbar{width:100%}.filterbar button{flex:1}.event-top{flex-direction:column}.kv{grid-template-columns:92px 1fr}.metric .value{font-size:24px}}
 </style>
 </head>
 <body>
@@ -589,7 +589,16 @@ input{border:1px solid var(--line);background:var(--card);color:var(--text);bord
       <div id="stream" class="stream"><div class="muted">加载中...</div></div>
     </section>
     <section class="card">
-      <h2>IP 攻击列表</h2>
+      <div class="section-head">
+        <div>
+          <h2>IP 攻击列表</h2>
+          <div class="hint">时间已按北京时间显示；可按来源 IP 快速过滤。</div>
+        </div>
+        <div class="filterbar">
+          <input id="ipFilter" class="filter-input" placeholder="搜索来源 IP，例如 125.112" oninput="setIPFilter(this.value)">
+          <button class="secondary" onclick="clearIPFilter()">清空</button>
+        </div>
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>来源 IP</th><th>目标用户</th><th>失败次数</th><th>攻击强度</th><th>节点</th><th>认证方式</th><th>时间</th><th>风险</th><th>状态</th><th>操作</th></tr></thead>
@@ -625,6 +634,7 @@ const eventTypeText = {
 };
 let attackRows = [];
 let eventRows = [];
+let ipFilter = '';
 function esc(s){return String(s ?? '').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 async function apiFetch(url, opts={}){
   const res = await fetch(url, {credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...opts});
@@ -633,6 +643,35 @@ async function apiFetch(url, opts={}){
   return data.data || {};
 }
 function toTime(s){const t = Date.parse(s || ''); return Number.isFinite(t) ? t : 0;}
+function fmtTime(s){
+  const t = toTime(s);
+  if(!t) return s || '-';
+  const d = new Date(t);
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone:'Asia/Shanghai',
+    year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit',
+    hour12:false
+  }).formatToParts(d).reduce((acc,p)=>{acc[p.type]=p.value; return acc;}, {});
+  return parts.year+'-'+parts.month+'-'+parts.day+' '+parts.hour+':'+parts.minute+':'+parts.second+' 北京时间';
+}
+function timeHTML(s){return '<span title="'+esc(s || '')+'">'+esc(fmtTime(s))+'</span>'}
+function setIPFilter(v){
+  ipFilter = String(v || '').trim();
+  renderAttacks();
+  renderStream();
+}
+function clearIPFilter(){
+  ipFilter = '';
+  const input = document.getElementById('ipFilter');
+  if(input) input.value = '';
+  renderAttacks();
+  renderStream();
+}
+function matchIP(row){
+  if(!ipFilter) return true;
+  return String(row.source_ip || '').includes(ipFilter);
+}
 function riskScore(a){
   if((a.status || '') === 'whitelisted') return 10;
   if((a.status || '') === 'banned') return 70;
@@ -669,12 +708,16 @@ function updateOverview(rows){
   document.getElementById('metric-today').textContent = rows.filter(a => isToday(a.timestamp)).reduce((n,a)=>n+Number(a.failed_count||0),0);
 }
 async function reloadAttacks(){
-  const tbody = document.getElementById('attacks');
   const data = await apiFetch('/api/security/attacks?limit=120');
   attackRows = sortedAttacks(data.attacks || []);
   updateOverview(attackRows);
+  renderAttacks();
   renderStream();
-  tbody.innerHTML = attackRows.length ? attackRows.map(a => {
+}
+function renderAttacks(){
+  const tbody = document.getElementById('attacks');
+  const rows = attackRows.filter(matchIP);
+  tbody.innerHTML = rows.length ? rows.map(a => {
     const inten = intensity(a);
     const rowClass = (a.status === 'banned' ? 'row-banned ' : '') + (a.risk === 'high' ? 'row-high' : '');
     return '<tr class="'+esc(rowClass)+'" onclick='+"'"+'openDrawer('+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid || a.client || '')+')'+"'"+'>'+
@@ -684,7 +727,7 @@ async function reloadAttacks(){
       '<td><span class="tag '+inten.cls+'">'+esc(inten.text)+'</span></td>'+
       '<td>'+esc(a.client)+'</td>'+
       '<td>'+esc(a.method)+'</td>'+
-      '<td class="mono">'+esc(a.timestamp)+'</td>'+
+      '<td class="mono">'+timeHTML(a.timestamp)+'</td>'+
       '<td><span class="tag '+esc(a.risk)+'">'+esc(riskLabel(a))+'</span></td>'+
       '<td><span class="tag status-'+esc(a.status)+'">'+esc(statusText[a.status]||a.status)+'</span></td>'+
       '<td><div class="actions">'+
@@ -693,7 +736,7 @@ async function reloadAttacks(){
         '<button class="good" title="加入白名单，跳过检测" onclick='+"'"+'event.stopPropagation();act("whitelist", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>⭐ Whitelist</button>'+
       '</div></td>'+
     '</tr>';
-  }).join('') : '<tr><td colspan="10" class="muted">暂无 SSH 攻击事件</td></tr>';
+  }).join('') : '<tr><td colspan="10" class="muted">'+(ipFilter ? '没有匹配该 IP 的 SSH 攻击事件' : '暂无 SSH 攻击事件')+'</td></tr>';
 }
 async function reloadEvents(){
   const box = document.getElementById('events');
@@ -702,7 +745,7 @@ async function reloadEvents(){
   renderStream();
   box.innerHTML = eventRows.length ? eventRows.map(e =>
     '<div class="event">'+
-      '<div class="event-top"><strong>'+esc(eventTypeText[e.type]||e.type)+'</strong><span class="mono muted">'+esc(e.timestamp)+'</span></div>'+
+      '<div class="event-top"><strong>'+esc(eventTypeText[e.type]||e.type)+'</strong><span class="mono muted">'+timeHTML(e.timestamp)+'</span></div>'+
       '<div>'+(e.client ? '节点：'+esc(e.client)+' · ' : '')+(e.source_ip ? '来源 IP：<span class="mono">'+esc(e.source_ip)+'</span> · ' : '')+(e.risk ? '<span class="tag '+esc(e.risk)+'">'+esc(riskText[e.risk]||e.risk)+'</span>' : '')+'</div>'+
       '<div class="muted">'+esc(e.message)+'</div>'+
     '</div>').join('') : '<div class="muted">暂无事件</div>';
@@ -710,14 +753,14 @@ async function reloadEvents(){
 function renderStream(){
   const box = document.getElementById('stream');
   if(!box) return;
-  let rows = eventRows.filter(e => e.type === 'SSHAuthGuardAlert');
-  if(!rows.length) rows = attackRows;
+  let rows = eventRows.filter(e => e.type === 'SSHAuthGuardAlert').filter(matchIP);
+  if(!rows.length) rows = attackRows.filter(matchIP);
   rows = [...rows].sort((a,b)=>toTime(b.timestamp)-toTime(a.timestamp)).slice(0,18);
   box.innerHTML = rows.length ? rows.map(e => {
     const st = e.status || 'active';
     const high = (e.risk === 'high' || riskScore(e) >= 80) ? ' high' : '';
     return '<div class="stream-item'+high+'" onclick='+"'"+'openDrawer('+JSON.stringify(e.source_ip)+', '+JSON.stringify(e.client_uuid || e.client || '')+')'+"'"+'>'+
-      '<div class="stream-top"><strong class="mono">'+esc(e.timestamp)+'</strong><span class="tag status-'+esc(st)+' '+(st === 'active' ? 'pulse' : '')+'">'+esc(statusText[st]||st)+'</span></div>'+
+      '<div class="stream-top"><strong class="mono">'+timeHTML(e.timestamp)+'</strong><span class="tag status-'+esc(st)+' '+(st === 'active' ? 'pulse' : '')+'">'+esc(statusText[st]||st)+'</span></div>'+
       '<div class="stream-main">'+
         '<span class="mono">'+esc(e.source_ip)+'</span>'+
         '<span>用户：'+esc(e.user || '-')+'</span>'+
@@ -725,7 +768,7 @@ function renderStream(){
         '<span>失败：<strong>'+esc(e.failed_count || 0)+'</strong></span>'+
         (e.risk ? '<span class="tag '+esc(e.risk)+'">'+esc(riskLabel(e))+'</span>' : '')+
       '</div></div>';
-  }).join('') : '<div class="muted">暂无攻击流</div>';
+  }).join('') : '<div class="muted">'+(ipFilter ? '没有匹配该 IP 的攻击流' : '暂无攻击流')+'</div>';
 }
 async function act(action, ip, client){
   if(action === 'whitelist' && !client){ alert('旧日志无法定位唯一 client，不能自动加入白名单'); return; }
@@ -757,7 +800,7 @@ function openDrawer(ip, clientKey){
     '<div class="mini-card"><h3 style="margin-top:0">用户尝试列表</h3><div>'+esc(users.join(', ') || '-')+'</div></div>'+
     '<div class="mini-card"><h3 style="margin-top:0">风险评分变化曲线</h3>'+sparkline(scores)+'</div>'+
     '<div class="mini-card"><h3 style="margin-top:0">攻击时间线</h3><div class="timeline">'+
-      (relatedEvents.length ? relatedEvents.slice(0,12).map(e => '<div class="timeline-item"><div><strong>'+esc(eventTypeText[e.type]||e.type)+'</strong> <span class="mono muted">'+esc(e.timestamp)+'</span></div><div class="muted">'+esc(e.user || '-')+' · '+esc(e.method || '-')+' · 失败 '+esc(e.failed_count || 0)+'</div></div>').join('') : '<div class="muted">暂无更细事件</div>')+
+      (relatedEvents.length ? relatedEvents.slice(0,12).map(e => '<div class="timeline-item"><div><strong>'+esc(eventTypeText[e.type]||e.type)+'</strong> <span class="mono muted">'+timeHTML(e.timestamp)+'</span></div><div class="muted">'+esc(e.user || '-')+' · '+esc(e.method || '-')+' · 失败 '+esc(e.failed_count || 0)+'</div></div>').join('') : '<div class="muted">暂无更细事件</div>')+
     '</div></div>';
   document.getElementById('drawerMask').classList.add('open');
   document.getElementById('drawer').classList.add('open');

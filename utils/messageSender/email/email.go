@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/tls"
 	"fmt"
+	"html"
 	"mime"
 	"mime/quotedprintable"
 	"net/mail"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/komari-monitor/komari/database/models"
 	"github.com/komari-monitor/komari/utils/messageSender/factory"
 )
 
@@ -89,7 +91,16 @@ func (e *EmailSender) Destroy() error {
 }
 
 func (e *EmailSender) SendTextMessage(message, title string) error {
+	return e.sendMail(message, "", title)
+}
 
+func (e *EmailSender) SendEvent(event models.EventMessage) error {
+	plain := formatPlainEventEmail(event)
+	htmlBody := formatHTMLEventEmail(event)
+	return e.sendMail(plain, htmlBody, event.Event)
+}
+
+func (e *EmailSender) sendMail(plainBody, htmlBody, title string) error {
 	if e.Addition.Host == "" || e.Addition.Sender == "" || e.Addition.Username == "" || e.Addition.Password == "" || e.Addition.Receiver == "" {
 		return fmt.Errorf("email sending is not fully configured")
 	}
@@ -150,38 +161,20 @@ func (e *EmailSender) SendTextMessage(message, title string) error {
 	// RFC 2047 encode subject if non-ASCII
 	encodedSubject := mime.QEncoding.Encode("UTF-8", title)
 
-	// Encode body as quoted-printable to be safe with UTF-8 on servers lacking 8BITMIME
-	var bodyBuf bytes.Buffer
-	qp := quotedprintable.NewWriter(&bodyBuf)
-	if _, err := qp.Write([]byte(message)); err != nil {
-		return fmt.Errorf("failed to encode body: %w", err)
-	}
-	if err := qp.Close(); err != nil {
-		return fmt.Errorf("failed to finalize body encoding: %w", err)
-	}
-
-	contentType := "text/plain; charset=UTF-8"
-	// 检测模板是否包含HTML
-	trimmedMsg := strings.TrimSpace(message)
-	if strings.Contains(strings.ToLower(trimmedMsg), "<html") ||
-		strings.Contains(strings.ToLower(trimmedMsg), "<!doctype") ||
-		(strings.Contains(trimmedMsg, "<div") && strings.Contains(trimmedMsg, "</div>")) {
-		contentType = "text/html; charset=UTF-8"
-	}
-
 	// Compose headers
 	headers := []string{
 		"To: " + strings.Join(rcptHeaderParts, ", "),
 		"From: " + senderHeader,
 		"Subject: " + encodedSubject,
 		"MIME-Version: 1.0",
-		"Content-Type: " + contentType,
-		"Content-Transfer-Encoding: quoted-printable",
 		"Date: " + time.Now().Format(time.RFC1123Z),
 		fmt.Sprintf("Message-ID: <%d@%s>", time.Now().UnixNano(), e.Addition.Host),
 	}
 
-	fullMsg := []byte(strings.Join(headers, "\r\n") + "\r\n\r\n" + bodyBuf.String())
+	fullMsg, err := buildMIMEMessage(headers, plainBody, htmlBody)
+	if err != nil {
+		return err
+	}
 
 	addr := e.Addition.Host + ":" + strconv.Itoa(e.Addition.Port)
 
@@ -296,3 +289,292 @@ func buildSenderAddress(sender, fromName string) (string, string) {
 
 // 确保实现了 IMessageSender 接口
 var _ factory.IMessageSender = (*EmailSender)(nil)
+var _ factory.IEventMessageSender = (*EmailSender)(nil)
+
+func buildMIMEMessage(headers []string, plainBody, htmlBody string) ([]byte, error) {
+	if strings.TrimSpace(plainBody) == "" {
+		plainBody = htmlToText(htmlBody)
+	}
+	if strings.TrimSpace(htmlBody) == "" {
+		var bodyBuf bytes.Buffer
+		if err := writeQuotedPrintable(&bodyBuf, plainBody); err != nil {
+			return nil, err
+		}
+		msgHeaders := append([]string{}, headers...)
+		msgHeaders = append(msgHeaders,
+			"Content-Type: text/plain; charset=UTF-8",
+			"Content-Transfer-Encoding: quoted-printable",
+		)
+		return []byte(strings.Join(msgHeaders, "\r\n") + "\r\n\r\n" + bodyBuf.String()), nil
+	}
+
+	boundary := fmt.Sprintf("komari-%d", time.Now().UnixNano())
+	msgHeaders := append([]string{}, headers...)
+	msgHeaders = append(msgHeaders, "Content-Type: multipart/alternative; boundary="+boundary)
+
+	var body bytes.Buffer
+	body.WriteString(strings.Join(msgHeaders, "\r\n"))
+	body.WriteString("\r\n\r\n")
+
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString("Content-Type: text/plain; charset=UTF-8\r\n")
+	body.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
+	if err := writeQuotedPrintable(&body, plainBody); err != nil {
+		return nil, err
+	}
+	body.WriteString("\r\n")
+
+	body.WriteString("--" + boundary + "\r\n")
+	body.WriteString("Content-Type: text/html; charset=UTF-8\r\n")
+	body.WriteString("Content-Transfer-Encoding: quoted-printable\r\n\r\n")
+	if err := writeQuotedPrintable(&body, htmlBody); err != nil {
+		return nil, err
+	}
+	body.WriteString("\r\n--" + boundary + "--\r\n")
+	return body.Bytes(), nil
+}
+
+func writeQuotedPrintable(buf *bytes.Buffer, body string) error {
+	qp := quotedprintable.NewWriter(buf)
+	if _, err := qp.Write([]byte(body)); err != nil {
+		return fmt.Errorf("failed to encode body: %w", err)
+	}
+	if err := qp.Close(); err != nil {
+		return fmt.Errorf("failed to finalize body encoding: %w", err)
+	}
+	return nil
+}
+
+func formatPlainEventEmail(event models.EventMessage) string {
+	return strings.TrimSpace(formatFallbackEventEmail(event))
+}
+
+func formatFallbackEventEmail(event models.EventMessage) string {
+	clientText := eventClientText(event)
+	switch event.Event {
+	case "SSH 登录成功":
+		return strings.Join([]string{
+			"🔐 SSH 安全登录提醒",
+			"节点名称：" + clientText,
+			event.Message,
+			"✅ SSH 会话已成功建立",
+		}, "\n")
+	case "SSH 爆破告警":
+		return strings.Join([]string{
+			"🚨 SSH 爆破告警",
+			event.Message,
+			"该告警只代表检测到失败登录行为。",
+		}, "\n")
+	case "Offline":
+		return "🔴 节点离线告警\n节点名称：" + clientText + "\n" + event.Message
+	case "Online":
+		return "🟢 节点恢复在线\n节点名称：" + clientText + "\n" + event.Message
+	default:
+		if strings.TrimSpace(event.Message) != "" {
+			return event.Event + "\n节点名称：" + clientText + "\n" + event.Message
+		}
+		return event.Event + "\n节点名称：" + clientText
+	}
+}
+
+func formatHTMLEventEmail(event models.EventMessage) string {
+	clientText := eventClientText(event)
+	fields := parseEventFields(event.Message)
+	timeText := formatEmailEventTime(event.Time)
+
+	switch event.Event {
+	case "SSH 爆破告警":
+		return htmlCard(emailCardOptions{
+			Accent:   "#f97316",
+			Title:    "🚨 SSH 爆破告警",
+			Subtitle: "检测到 SSH 登录失败 / 爆破行为",
+			Fields: []emailField{
+				{"节点名称", clientText},
+				{"来源 IP", firstNonEmpty(fields["来源 IP"], fields["来源IP"])},
+				{"目标用户", fields["目标用户"]},
+				{"认证方式", fields["认证方式"]},
+				{"失败次数", fields["失败次数"]},
+				{"统计窗口", fields["统计窗口"]},
+				{"时间", firstNonEmpty(fields["时间"], timeText)},
+				{"封禁状态", firstNonEmpty(fields["封禁状态"], "未启用自动封禁")},
+			},
+			Footer:      "该告警只代表检测到失败登录行为。",
+			FooterColor: "#fff7ed",
+			FooterText:  "#9a3412",
+		})
+	case "SSH 登录成功":
+		return htmlCard(emailCardOptions{
+			Accent:   "#111827",
+			Title:    "🔐 SSH 安全登录提醒",
+			Subtitle: "检测到服务器成功建立 SSH 会话",
+			Fields: []emailField{
+				{"节点名称", clientText},
+				{"登录账户", fields["登录账户"]},
+				{"来源地址", fields["来源地址"]},
+				{"登录终端", fields["登录终端"]},
+				{"认证方式", fields["认证方式"]},
+				{"登录时间", firstNonEmpty(fields["登录时间"], timeText)},
+			},
+			Footer:      "✅ SSH 会话已成功建立",
+			FooterColor: "#ecfdf5",
+			FooterText:  "#047857",
+		})
+	case "Offline":
+		return htmlCard(emailCardOptions{
+			Accent:   "#dc2626",
+			Title:    "🔴 节点离线告警",
+			Subtitle: "机器已离线，超过宽限期。",
+			Fields: []emailField{
+				{"节点名称", clientText},
+				{"说明", event.Message},
+				{"时间", timeText},
+			},
+			Footer:      "请检查机器网络、系统负载或探针进程状态。",
+			FooterColor: "#fef2f2",
+			FooterText:  "#991b1b",
+		})
+	case "Online":
+		return htmlCard(emailCardOptions{
+			Accent:   "#16a34a",
+			Title:    "🟢 节点恢复在线",
+			Subtitle: "机器连接已恢复。",
+			Fields: []emailField{
+				{"节点名称", clientText},
+				{"说明", event.Message},
+				{"时间", timeText},
+			},
+			Footer:      "节点当前已恢复在线。",
+			FooterColor: "#ecfdf5",
+			FooterText:  "#047857",
+		})
+	default:
+		return htmlCard(emailCardOptions{
+			Accent:   "#4f46e5",
+			Title:    event.Event,
+			Subtitle: "Komari 通知",
+			Fields: []emailField{
+				{"节点名称", clientText},
+				{"说明", event.Message},
+				{"时间", timeText},
+			},
+			Footer:      "来自 Komari Monitor",
+			FooterColor: "#eef2ff",
+			FooterText:  "#3730a3",
+		})
+	}
+}
+
+type emailField struct {
+	Label string
+	Value string
+}
+
+type emailCardOptions struct {
+	Accent      string
+	Title       string
+	Subtitle    string
+	Fields      []emailField
+	Footer      string
+	FooterColor string
+	FooterText  string
+}
+
+func htmlCard(opts emailCardOptions) string {
+	var rows strings.Builder
+	for _, field := range opts.Fields {
+		value := strings.TrimSpace(field.Value)
+		if value == "" {
+			value = "-"
+		}
+		rows.WriteString(`<tr><td style="padding:9px 0;color:#6b7280;font-size:14px;white-space:nowrap;width:92px;vertical-align:top;">`)
+		rows.WriteString(html.EscapeString(field.Label))
+		rows.WriteString(`</td><td style="padding:9px 0;color:#111827;font-size:15px;font-weight:600;line-height:1.45;word-break:break-word;">`)
+		rows.WriteString(html.EscapeString(value))
+		rows.WriteString(`</td></tr>`)
+	}
+
+	return `<!doctype html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,'PingFang SC','Microsoft YaHei',sans-serif;color:#111827;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;background:#f3f4f6;padding:18px 10px;"><tr><td align="center"><table role="presentation" cellspacing="0" cellpadding="0" style="width:100%;max-width:560px;background:#ffffff;border-radius:18px;overflow:hidden;border:1px solid #e5e7eb;box-shadow:0 8px 24px rgba(15,23,42,0.08);"><tr><td style="background:` + html.EscapeString(opts.Accent) + `;padding:18px 20px;color:#ffffff;"><div style="font-size:20px;font-weight:800;line-height:1.25;">` + html.EscapeString(opts.Title) + `</div><div style="font-size:13px;line-height:1.5;opacity:0.92;margin-top:5px;">` + html.EscapeString(opts.Subtitle) + `</div></td></tr><tr><td style="padding:18px 20px 8px 20px;"><table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="width:100%;border-collapse:collapse;">` + rows.String() + `</table></td></tr><tr><td style="padding:8px 20px 20px 20px;"><div style="border-radius:12px;background:` + html.EscapeString(opts.FooterColor) + `;color:` + html.EscapeString(opts.FooterText) + `;padding:12px 14px;font-size:14px;font-weight:700;line-height:1.5;">` + html.EscapeString(opts.Footer) + `</div></td></tr></table></td></tr></table></body></html>`
+}
+
+func parseEventFields(message string) map[string]string {
+	fields := make(map[string]string)
+	for _, raw := range strings.Split(message, "\n") {
+		line := strings.TrimSpace(raw)
+		line = strings.TrimLeft(line, "🔐🚨🖥️📌👤🌐💻🔑🕒📈📦🎯⚠️✅ ")
+		if line == "" || strings.HasPrefix(line, "说明") {
+			continue
+		}
+		idx := strings.Index(line, "：")
+		sepLen := len("：")
+		if idx < 0 {
+			idx = strings.Index(line, ":")
+			sepLen = len(":")
+		}
+		if idx <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:idx])
+		value := strings.TrimSpace(line[idx+sepLen:])
+		if key != "" && value != "" {
+			fields[key] = value
+		}
+	}
+	return fields
+}
+
+func eventClientText(event models.EventMessage) string {
+	names := make([]string, 0, len(event.Clients))
+	for _, client := range event.Clients {
+		name := strings.TrimSpace(client.Name)
+		if name == "" {
+			name = strings.TrimSpace(client.UUID)
+		}
+		if name != "" {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return "-"
+	}
+	return strings.Join(names, ", ")
+}
+
+func formatEmailEventTime(t time.Time) string {
+	if t.IsZero() {
+		t = time.Now()
+	}
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		loc = time.FixedZone("CST", 8*60*60)
+	}
+	return t.In(loc).Format("2006-01-02 15:04:05 北京时间")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func htmlToText(body string) string {
+	replacer := strings.NewReplacer("<br>", "\n", "<br/>", "\n", "<br />", "\n", "</p>", "\n", "</div>", "\n", "</tr>", "\n")
+	text := replacer.Replace(body)
+	var out strings.Builder
+	inTag := false
+	for _, r := range text {
+		switch r {
+		case '<':
+			inTag = true
+		case '>':
+			inTag = false
+		default:
+			if !inTag {
+				out.WriteRune(r)
+			}
+		}
+	}
+	return strings.TrimSpace(html.UnescapeString(out.String()))
+}

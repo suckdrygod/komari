@@ -5,6 +5,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -16,6 +17,16 @@ import (
 )
 
 var sshAuthGuardSafeToken = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+var sshAuthGuardSafeList = regexp.MustCompile(`^[A-Za-z0-9._,\- ]{1,256}$`)
+
+const sshAuthGuardPanelCooldown = 30 * time.Minute
+
+var sshAuthGuardNotifyCooldown = struct {
+	sync.Mutex
+	last map[string]time.Time
+}{
+	last: make(map[string]time.Time),
+}
 
 // SSHAuthGuardAlertParams is an already-aggregated SSH authentication failure
 // alert reported by a safe agent. It is not a raw SSH log line.
@@ -27,6 +38,7 @@ type SSHAuthGuardAlertParams struct {
 	WindowSeconds int    `json:"window_seconds"`
 	OccurredAt    string `json:"occurred_at"`
 	SampleMessage string `json:"sample_message"`
+	BanStatus     string `json:"ban_status"`
 }
 
 // NotifySSHAuthGuardAlert validates an aggregated, outbound-only SSH auth
@@ -41,10 +53,10 @@ func NotifySSHAuthGuardAlert(clientUUID string, params SSHAuthGuardAlertParams) 
 	if net.ParseIP(params.SourceIP) == nil {
 		return fmt.Errorf("invalid SSH auth guard source IP")
 	}
-	if params.User == "" || !sshAuthGuardSafeToken.MatchString(params.User) {
+	if params.User == "" || !sshAuthGuardSafeList.MatchString(params.User) {
 		return fmt.Errorf("invalid SSH auth guard user")
 	}
-	if params.Method == "" || !sshAuthGuardSafeToken.MatchString(params.Method) {
+	if params.Method == "" || !sshAuthGuardSafeList.MatchString(params.Method) {
 		return fmt.Errorf("invalid SSH auth guard method")
 	}
 	if params.FailedCount < 1 || params.FailedCount > 10000 {
@@ -53,6 +65,7 @@ func NotifySSHAuthGuardAlert(clientUUID string, params SSHAuthGuardAlertParams) 
 	if params.WindowSeconds < 1 || params.WindowSeconds > 86400 {
 		return fmt.Errorf("invalid SSH auth guard window")
 	}
+	params.BanStatus = sanitizeSSHAuthGuardSample(params.BanStatus)
 	occurredAt, err := time.Parse(time.RFC3339Nano, params.OccurredAt)
 	if err != nil {
 		return fmt.Errorf("invalid SSH auth guard timestamp")
@@ -77,6 +90,13 @@ func NotifySSHAuthGuardAlert(clientUUID string, params SSHAuthGuardAlertParams) 
 	if !shouldSendSSHAuthGuardNotification(notificationConfig, params.SourceIP) {
 		return nil
 	}
+	if !allowSSHAuthGuardPanelNotification(client.UUID, params.SourceIP, now) {
+		auditlog.EventLog("warn", fmt.Sprintf(
+			"SSH auth guard alert suppressed: client=%s ip=%s reason=cooldown",
+			client.Name, params.SourceIP,
+		))
+		return nil
+	}
 
 	event := models.EventMessage{
 		Event:   "SSH 爆破告警",
@@ -94,8 +114,12 @@ func shouldSendSSHAuthGuardNotification(notification models.SSHLoginNotification
 }
 
 func formatSSHAuthGuardAlertMessage(client models.Client, params SSHAuthGuardAlertParams, occurredAt time.Time) string {
+	banStatus := params.BanStatus
+	if banStatus == "" {
+		banStatus = "未启用自动封禁"
+	}
 	return fmt.Sprintf(
-		"服务器：%s\n来源 IP：%s\n目标用户：%s\n认证方式：%s\n失败次数：%d\n统计窗口：%d 秒\n时间：%s\n\n说明：该告警只代表检测到 SSH 登录失败爆破行为，未执行封禁命令。",
+		"服务器：%s\n来源 IP：%s\n目标用户：%s\n认证方式：%s\n失败次数：%d\n统计窗口：%d 秒\n时间：%s\n封禁状态：%s\n\n说明：该告警只代表检测到 SSH 登录失败 / 爆破行为。",
 		client.Name,
 		params.SourceIP,
 		params.User,
@@ -103,22 +127,37 @@ func formatSSHAuthGuardAlertMessage(client models.Client, params SSHAuthGuardAle
 		params.FailedCount,
 		params.WindowSeconds,
 		formatBeijingTime(occurredAt),
+		banStatus,
 	)
 }
 
 func formatSSHAuthGuardMethod(method string) string {
-	switch strings.ToLower(strings.TrimSpace(method)) {
-	case "password":
-		return "密码"
-	case "publickey":
-		return "密钥"
-	case "invalid-user":
-		return "无效用户"
-	case "pam":
-		return "PAM"
-	default:
+	parts := strings.Split(method, ",")
+	result := make([]string, 0, len(parts))
+	seen := make(map[string]bool, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" || seen[part] {
+			continue
+		}
+		seen[part] = true
+		switch strings.ToLower(part) {
+		case "password":
+			result = append(result, "密码")
+		case "publickey":
+			result = append(result, "密钥")
+		case "invalid-user":
+			result = append(result, "无效用户")
+		case "pam":
+			result = append(result, "PAM")
+		default:
+			result = append(result, part)
+		}
+	}
+	if len(result) == 0 {
 		return method
 	}
+	return strings.Join(result, ", ")
 }
 
 func sanitizeSSHAuthGuardSample(sample string) string {
@@ -147,4 +186,21 @@ func sendSSHAuthGuardAlert(event models.EventMessage) {
 	if err := messageSender.SendEvent(event); err != nil {
 		auditlog.EventLog("error", "Failed to send SSH auth guard alert: "+err.Error())
 	}
+}
+
+func allowSSHAuthGuardPanelNotification(clientUUID, sourceIP string, now time.Time) bool {
+	key := clientUUID + "|" + sourceIP + "|SSHAuthGuard"
+	sshAuthGuardNotifyCooldown.Lock()
+	defer sshAuthGuardNotifyCooldown.Unlock()
+	if last, ok := sshAuthGuardNotifyCooldown.last[key]; ok && now.Sub(last) < sshAuthGuardPanelCooldown {
+		return false
+	}
+	sshAuthGuardNotifyCooldown.last[key] = now
+	cutoff := now.Add(-2 * sshAuthGuardPanelCooldown)
+	for k, seen := range sshAuthGuardNotifyCooldown.last {
+		if seen.Before(cutoff) {
+			delete(sshAuthGuardNotifyCooldown.last, k)
+		}
+	}
+	return true
 }

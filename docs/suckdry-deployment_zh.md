@@ -184,17 +184,19 @@ WebSocket connected using v2 protocol
 ```bash
 --ssh-auth-threshold 5
 --ssh-auth-window 60
---ssh-auth-cooldown 600
+--ssh-auth-cooldown 1800
+--ssh-auth-aggregate-by-ip
 --ssh-auth-root-only false
 ```
 
 含义：
 
-- 60 秒内，同一来源 IP + 同一目标用户失败 5 次，触发 1 次告警。
-- 同一来源 IP + 用户触发后，10 分钟内不会重复刷屏。
+- 60 秒内，同一来源 IP 失败 5 次，触发 1 次告警。
+- 同一来源 IP 会合并多个目标用户，例如 `root, ubuntu, admin, unknown`。
+- 同一来源 IP 触发后，30 分钟内不会重复刷屏。
 - 默认检测 root 和普通用户，不只检测 root。
 
-SSH Auth Guard 只做检测和告警：
+SSH Auth Guard 默认只做检测和告警：
 
 - 不调用 `iptables`
 - 不调用 `nftables`
@@ -202,6 +204,19 @@ SSH Auth Guard 只做检测和告警：
 - 不调用 `sshguard`
 - 不执行任何封禁命令
 - 不新增远程命令能力
+
+可选本机自动封禁必须显式开启：
+
+```bash
+--ssh-auth-ban-enable
+--ssh-auth-ban-after 5
+--ssh-auth-ban-duration 3600
+--ssh-auth-ban-whitelist "1.2.3.4,1.2.3.0/24"
+--ssh-auth-ban-mode nftables
+--ssh-auth-ban-dry-run
+```
+
+注意：封禁动作只由本机 agent 执行固定 nftables 动作，panel 不会下发任意命令；不支持 nftables 的系统只记录封禁失败状态，不会自动 fallback 到 iptables / fail2ban / sshguard。
 
 面板会复用“SSH 登录通知”的配置：
 

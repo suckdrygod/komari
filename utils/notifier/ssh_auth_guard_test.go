@@ -26,7 +26,8 @@ func TestFormatSSHAuthGuardAlertMessage(t *testing.T) {
 	assert.Contains(t, message, "失败次数：5")
 	assert.Contains(t, message, "统计窗口：60 秒")
 	assert.Contains(t, message, "时间：2026-06-23 22:52:26 北京时间")
-	assert.Contains(t, message, "未执行封禁命令")
+	assert.Contains(t, message, "封禁状态：未启用自动封禁")
+	assert.Contains(t, message, "该告警只代表检测到 SSH 登录失败 / 爆破行为")
 }
 
 func TestSanitizeSSHAuthGuardSample(t *testing.T) {
@@ -38,6 +39,10 @@ func TestSanitizeSSHAuthGuardSample(t *testing.T) {
 
 	long := sanitizeSSHAuthGuardSample(strings.Repeat("a", 400))
 	assert.LessOrEqual(t, len(long), 240)
+}
+
+func TestFormatSSHAuthGuardMethodList(t *testing.T) {
+	assert.Equal(t, "密码, 无效用户, PAM", formatSSHAuthGuardMethod("password, invalid-user, pam"))
 }
 
 func TestShouldSendSSHAuthGuardNotification(t *testing.T) {
@@ -57,4 +62,16 @@ func TestShouldSendSSHAuthGuardNotification(t *testing.T) {
 		Enable:      false,
 		IPWhitelist: models.StringArray{},
 	}, "203.0.113.5"))
+}
+
+func TestAllowSSHAuthGuardPanelNotificationCooldown(t *testing.T) {
+	sshAuthGuardNotifyCooldown.Lock()
+	sshAuthGuardNotifyCooldown.last = make(map[string]time.Time)
+	sshAuthGuardNotifyCooldown.Unlock()
+
+	now := time.Date(2026, 6, 24, 12, 0, 0, 0, time.UTC)
+	assert.True(t, allowSSHAuthGuardPanelNotification("client-a", "203.0.113.5", now))
+	assert.False(t, allowSSHAuthGuardPanelNotification("client-a", "203.0.113.5", now.Add(10*time.Minute)))
+	assert.True(t, allowSSHAuthGuardPanelNotification("client-a", "203.0.113.6", now.Add(10*time.Minute)))
+	assert.True(t, allowSSHAuthGuardPanelNotification("client-a", "203.0.113.5", now.Add(31*time.Minute)))
 }

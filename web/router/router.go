@@ -6,6 +6,7 @@ import (
 	"github.com/komari-monitor/komari/web/api/admin"
 	"github.com/komari-monitor/komari/web/api/client"
 	public_api "github.com/komari-monitor/komari/web/api/public"
+	"github.com/komari-monitor/komari/web/api/securityconsole"
 	"github.com/komari-monitor/komari/web/api/terminal"
 	"github.com/komari-monitor/komari/web/public"
 	jsonRpc "github.com/komari-monitor/komari/web/rpc/jsonrpc"
@@ -23,10 +24,26 @@ func Register(r *gin.Engine) {
 	registerPublicRoutes(r)
 	registerAgentRoutes(r)
 	registerAdminRoutes(r)
+	registerSecurityRoutes(r)
 
 	public.Static(r.Group("/"), func(handlers ...gin.HandlerFunc) {
 		r.NoRoute(handlers...)
 	})
+}
+
+// registerSecurityRoutes adds a minimal, admin-only security console without
+// changing the existing SPA build or WebSocket/RPC architecture.
+func registerSecurityRoutes(r *gin.Engine) {
+	r.GET("/security/dashboard", api.RequireRole(api.RoleAdmin), securityconsole.Dashboard)
+
+	g := r.Group("/api/security", api.RequireRole(api.RoleAdmin))
+	{
+		g.GET("/events", securityconsole.ListEvents)
+		g.GET("/attacks", securityconsole.ListAttacks)
+		g.POST("/ban", securityconsole.BanIP)
+		g.POST("/unban", securityconsole.UnbanIP)
+		g.POST("/whitelist", securityconsole.WhitelistIP)
+	}
 }
 
 // registerPublicRoutes 公开路由。JSON 读接口经 Bind 绑定到 public: 命名空间方法。

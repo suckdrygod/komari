@@ -84,16 +84,16 @@ func NotifySSHAuthGuardAlert(clientUUID string, params SSHAuthGuardAlertParams) 
 		return err
 	}
 	auditlog.EventLog("warn", fmt.Sprintf(
-		"SSH auth guard alert: client=%s, ip=%s, user=%s, count=%d",
-		client.Name, params.SourceIP, params.User, params.FailedCount,
+		"SSH auth guard alert: client=%s, uuid=%s, ip=%s, user=%s, method=%s, count=%d",
+		client.Name, client.UUID, params.SourceIP, params.User, params.Method, params.FailedCount,
 	))
 	if !shouldSendSSHAuthGuardNotification(notificationConfig, params.SourceIP) {
 		return nil
 	}
 	if !allowSSHAuthGuardPanelNotification(client.UUID, params.SourceIP, now) {
 		auditlog.EventLog("warn", fmt.Sprintf(
-			"SSH auth guard alert suppressed: client=%s ip=%s reason=cooldown",
-			client.Name, params.SourceIP,
+			"SSH auth guard alert suppressed: client=%s uuid=%s ip=%s reason=cooldown",
+			client.Name, client.UUID, params.SourceIP,
 		))
 		return nil
 	}

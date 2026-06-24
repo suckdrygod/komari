@@ -1,0 +1,589 @@
+package securityconsole
+
+import (
+	"fmt"
+	"net"
+	"net/http"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/komari-monitor/komari/database/auditlog"
+	"github.com/komari-monitor/komari/database/clients"
+	"github.com/komari-monitor/komari/database/dbcore"
+	"github.com/komari-monitor/komari/database/models"
+	"github.com/komari-monitor/komari/database/sshlogin"
+	"github.com/komari-monitor/komari/pkg/config"
+	"github.com/komari-monitor/komari/web/api"
+)
+
+const securityIPStatesKey = "security_ip_states"
+
+var (
+	authGuardAlertNewRE   = regexp.MustCompile(`^SSH auth guard alert: client=(.*), uuid=([^,]+), ip=([^,]+), user=(.*), method=(.*), count=(\d+)`)
+	authGuardAlertOldRE   = regexp.MustCompile(`^SSH auth guard alert: client=(.*), ip=([^,]+), user=(.*), count=(\d+)`)
+	authGuardSuppressedRE = regexp.MustCompile(`^SSH auth guard alert suppressed: client=(.*?)(?: uuid=([^ ]+))? ip=([^ ]+) reason=([A-Za-z0-9_-]+)`)
+	eventSentRE           = regexp.MustCompile(`^Event message sent via ([^:]+): (.+)$`)
+	eventFailedRE         = regexp.MustCompile(`^Failed to send event message via ([^ ]+) .*?,(.+)$`)
+)
+
+type IPState struct {
+	Status    string `json:"status"`
+	Client    string `json:"client,omitempty"`
+	IP        string `json:"ip"`
+	Reason    string `json:"reason,omitempty"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+type SecurityAttack struct {
+	SourceIP    string `json:"source_ip"`
+	User        string `json:"user"`
+	FailedCount int    `json:"failed_count"`
+	Client      string `json:"client"`
+	ClientUUID  string `json:"client_uuid,omitempty"`
+	Method      string `json:"method"`
+	Timestamp   string `json:"timestamp"`
+	Status      string `json:"status"`
+	Risk        string `json:"risk"`
+}
+
+type SecurityEvent struct {
+	ID          uint   `json:"id"`
+	Type        string `json:"type"`
+	SourceIP    string `json:"source_ip,omitempty"`
+	User        string `json:"user,omitempty"`
+	FailedCount int    `json:"failed_count,omitempty"`
+	Client      string `json:"client,omitempty"`
+	ClientUUID  string `json:"client_uuid,omitempty"`
+	Method      string `json:"method,omitempty"`
+	Timestamp   string `json:"timestamp"`
+	Status      string `json:"status,omitempty"`
+	Risk        string `json:"risk,omitempty"`
+	Message     string `json:"message"`
+}
+
+type securityActionRequest struct {
+	IP     string `json:"ip"`
+	Client string `json:"client"`
+	Reason string `json:"reason"`
+}
+
+func Dashboard(c *gin.Context) {
+	c.Data(http.StatusOK, "text/html; charset=utf-8", []byte(dashboardHTML))
+}
+
+func ListAttacks(c *gin.Context) {
+	limit := parseLimit(c.DefaultQuery("limit", "100"), 1, 500)
+	logs, err := querySecurityLogs(limit * 4)
+	if err != nil {
+		api.RespondError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resolver := newClientResolver()
+	states := loadIPStates()
+	attacks := make([]SecurityAttack, 0, limit)
+	seen := make(map[string]struct{}, limit)
+	for _, logEntry := range logs {
+		attack, ok := attackFromLog(logEntry, resolver, states)
+		if !ok {
+			continue
+		}
+		key := attack.ClientUUID + "|" + attack.Client + "|" + attack.SourceIP + "|" + attack.User
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		attacks = append(attacks, attack)
+		if len(attacks) >= limit {
+			break
+		}
+	}
+	api.RespondSuccess(c, gin.H{"attacks": attacks})
+}
+
+func ListEvents(c *gin.Context) {
+	limit := parseLimit(c.DefaultQuery("limit", "100"), 1, 500)
+	logs, err := querySecurityLogs(limit * 3)
+	if err != nil {
+		api.RespondError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resolver := newClientResolver()
+	states := loadIPStates()
+	events := make([]SecurityEvent, 0, limit)
+	for _, logEntry := range logs {
+		if event, ok := eventFromLog(logEntry, resolver, states); ok {
+			events = append(events, event)
+			if len(events) >= limit {
+				break
+			}
+		}
+	}
+	api.RespondSuccess(c, gin.H{"events": events})
+}
+
+func BanIP(c *gin.Context) {
+	req, ok := bindAction(c)
+	if !ok {
+		return
+	}
+	states := loadIPStates()
+	key := stateKey(req.Client, req.IP)
+	states[key] = IPState{
+		Status:    "banned",
+		Client:    req.Client,
+		IP:        req.IP,
+		Reason:    trimSingleLine(req.Reason, 160),
+		UpdatedAt: time.Now().Format(time.RFC3339),
+	}
+	if err := saveIPStates(states); err != nil {
+		api.RespondError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard ban ip=%s client=%s mode=panel_mark_only", req.IP, req.Client), "warn")
+	api.RespondSuccess(c, gin.H{"status": "banned", "mode": "panel_mark_only"})
+}
+
+func UnbanIP(c *gin.Context) {
+	req, ok := bindAction(c)
+	if !ok {
+		return
+	}
+	states := loadIPStates()
+	delete(states, stateKey(req.Client, req.IP))
+	delete(states, stateKey("", req.IP))
+	if err := saveIPStates(states); err != nil {
+		api.RespondError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard unban ip=%s client=%s mode=panel_mark_only", req.IP, req.Client), "warn")
+	api.RespondSuccess(c, gin.H{"status": "active", "mode": "panel_mark_only"})
+}
+
+func WhitelistIP(c *gin.Context) {
+	req, ok := bindAction(c)
+	if !ok {
+		return
+	}
+	if strings.TrimSpace(req.Client) == "" {
+		api.RespondError(c, http.StatusBadRequest, "client is required for whitelist")
+		return
+	}
+	notification, err := sshlogin.GetNotification(req.Client)
+	if err != nil {
+		api.RespondError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	entry := strings.TrimSpace(req.IP)
+	for _, existing := range notification.IPWhitelist {
+		if strings.TrimSpace(existing) == entry {
+			auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard whitelist ip=%s client=%s already_exists=true", entry, req.Client), "info")
+			api.RespondSuccess(c, gin.H{"status": "whitelisted"})
+			return
+		}
+	}
+	notification.IPWhitelist = append(notification.IPWhitelist, entry)
+	if err := sshlogin.EditNotifications([]models.SSHLoginNotification{notification}); err != nil {
+		api.RespondError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard whitelist ip=%s client=%s", entry, req.Client), "warn")
+	api.RespondSuccess(c, gin.H{"status": "whitelisted"})
+}
+
+func bindAction(c *gin.Context) (securityActionRequest, bool) {
+	var req securityActionRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.RespondError(c, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return req, false
+	}
+	req.IP = strings.TrimSpace(req.IP)
+	req.Client = strings.TrimSpace(req.Client)
+	if !validIPOrCIDR(req.IP) {
+		api.RespondError(c, http.StatusBadRequest, "invalid IP or CIDR")
+		return req, false
+	}
+	if req.Client != "" {
+		if _, err := clients.GetClientByUUID(req.Client); err != nil {
+			api.RespondError(c, http.StatusBadRequest, "invalid client")
+			return req, false
+		}
+	}
+	return req, true
+}
+
+func querySecurityLogs(limit int) ([]models.Log, error) {
+	var logs []models.Log
+	err := dbcore.GetDBInstance().
+		Model(&models.Log{}).
+		Where("message LIKE ? OR message LIKE ? OR message LIKE ? OR message LIKE ? OR message LIKE ? OR message LIKE ?",
+			"SSH auth guard alert:%",
+			"SSH auth guard alert suppressed:%",
+			"Event message sent via%: SSH 爆破告警",
+			"Event message sent via%: Offline",
+			"Event message sent via%: Online",
+			"Failed to send event message via%",
+		).
+		Order("time DESC").
+		Limit(limit).
+		Find(&logs).Error
+	return logs, err
+}
+
+func attackFromLog(logEntry models.Log, resolver clientResolver, states map[string]IPState) (SecurityAttack, bool) {
+	clientName := ""
+	clientUUID := ""
+	sourceIP := ""
+	user := ""
+	method := ""
+	failedCount := 0
+
+	if match := authGuardAlertNewRE.FindStringSubmatch(logEntry.Message); match != nil {
+		clientName = strings.TrimSpace(match[1])
+		clientUUID = strings.TrimSpace(match[2])
+		sourceIP = strings.TrimSpace(match[3])
+		user = strings.TrimSpace(match[4])
+		method = strings.TrimSpace(match[5])
+		failedCount, _ = strconv.Atoi(strings.TrimSpace(match[6]))
+	} else if match := authGuardAlertOldRE.FindStringSubmatch(logEntry.Message); match != nil {
+		clientName = strings.TrimSpace(match[1])
+		sourceIP = strings.TrimSpace(match[2])
+		user = strings.TrimSpace(match[3])
+		failedCount, _ = strconv.Atoi(strings.TrimSpace(match[4]))
+	} else {
+		return SecurityAttack{}, false
+	}
+
+	if clientUUID == "" {
+		clientUUID = resolver.UUIDByName(clientName)
+	}
+	if method == "" {
+		method = "unknown"
+	}
+	status := resolveIPStatus(clientUUID, sourceIP, states)
+	return SecurityAttack{
+		SourceIP:    sourceIP,
+		User:        user,
+		FailedCount: failedCount,
+		Client:      clientName,
+		ClientUUID:  clientUUID,
+		Method:      method,
+		Timestamp:   logEntry.Time.ToTime().Format(time.RFC3339),
+		Status:      status,
+		Risk:        riskLevel(failedCount, status),
+	}, true
+}
+
+func eventFromLog(logEntry models.Log, resolver clientResolver, states map[string]IPState) (SecurityEvent, bool) {
+	if attack, ok := attackFromLog(logEntry, resolver, states); ok {
+		return SecurityEvent{
+			ID:          logEntry.ID,
+			Type:        "SSHAuthGuardAlert",
+			SourceIP:    attack.SourceIP,
+			User:        attack.User,
+			FailedCount: attack.FailedCount,
+			Client:      attack.Client,
+			ClientUUID:  attack.ClientUUID,
+			Method:      attack.Method,
+			Timestamp:   attack.Timestamp,
+			Status:      attack.Status,
+			Risk:        attack.Risk,
+			Message:     logEntry.Message,
+		}, true
+	}
+	if match := authGuardSuppressedRE.FindStringSubmatch(logEntry.Message); match != nil {
+		clientName := strings.TrimSpace(match[1])
+		clientUUID := strings.TrimSpace(match[2])
+		sourceIP := strings.TrimSpace(match[3])
+		if clientUUID == "" {
+			clientUUID = resolver.UUIDByName(clientName)
+		}
+		return SecurityEvent{
+			ID:         logEntry.ID,
+			Type:       "SSHAuthGuardSuppressed",
+			SourceIP:   sourceIP,
+			Client:     clientName,
+			ClientUUID: clientUUID,
+			Timestamp:  logEntry.Time.ToTime().Format(time.RFC3339),
+			Status:     resolveIPStatus(clientUUID, sourceIP, states),
+			Message:    logEntry.Message,
+		}, true
+	}
+	if match := eventSentRE.FindStringSubmatch(logEntry.Message); match != nil {
+		eventName := strings.TrimSpace(match[2])
+		if eventName == "Offline" || eventName == "Online" {
+			return SecurityEvent{
+				ID:        logEntry.ID,
+				Type:      eventName,
+				Timestamp: logEntry.Time.ToTime().Format(time.RFC3339),
+				Status:    "active",
+				Risk:      eventRisk(eventName),
+				Message:   logEntry.Message,
+			}, true
+		}
+	}
+	if match := eventFailedRE.FindStringSubmatch(logEntry.Message); match != nil {
+		eventName := strings.TrimSpace(match[2])
+		if eventName == "SSH 爆破告警" || eventName == "Offline" || eventName == "Online" {
+			return SecurityEvent{
+				ID:        logEntry.ID,
+				Type:      eventName + "SendFailed",
+				Timestamp: logEntry.Time.ToTime().Format(time.RFC3339),
+				Status:    "active",
+				Risk:      "medium",
+				Message:   logEntry.Message,
+			}, true
+		}
+	}
+	return SecurityEvent{}, false
+}
+
+func resolveIPStatus(clientUUID, sourceIP string, states map[string]IPState) string {
+	if clientUUID != "" {
+		if notification, err := sshlogin.GetNotification(clientUUID); err == nil && notification.IsIPWhitelisted(sourceIP) {
+			return "whitelisted"
+		}
+		if status := matchMarkedState(states, clientUUID, sourceIP); status != "" {
+			return status
+		}
+	}
+	if status := matchMarkedState(states, "", sourceIP); status != "" {
+		return status
+	}
+	return "active"
+}
+
+func matchMarkedState(states map[string]IPState, clientUUID, sourceIP string) string {
+	if state, ok := states[stateKey(clientUUID, sourceIP)]; ok && state.Status != "" {
+		return state.Status
+	}
+	parsed := net.ParseIP(sourceIP)
+	if parsed == nil {
+		return ""
+	}
+	for _, state := range states {
+		if strings.TrimSpace(state.Client) != strings.TrimSpace(clientUUID) || state.Status == "" {
+			continue
+		}
+		if _, ipNet, err := net.ParseCIDR(state.IP); err == nil && ipNet.Contains(parsed) {
+			return state.Status
+		}
+	}
+	return ""
+}
+
+func riskLevel(failedCount int, status string) string {
+	if status == "whitelisted" {
+		return "low"
+	}
+	if status == "banned" {
+		return "high"
+	}
+	if failedCount >= 20 {
+		return "high"
+	}
+	if failedCount >= 5 {
+		return "medium"
+	}
+	return "low"
+}
+
+func eventRisk(eventName string) string {
+	switch eventName {
+	case "Offline":
+		return "high"
+	case "Online":
+		return "low"
+	default:
+		return "medium"
+	}
+}
+
+func validIPOrCIDR(value string) bool {
+	if strings.Contains(value, "/") {
+		_, _, err := net.ParseCIDR(value)
+		return err == nil
+	}
+	return net.ParseIP(value) != nil
+}
+
+func trimSingleLine(value string, maxLen int) string {
+	value = strings.TrimSpace(strings.ReplaceAll(strings.ReplaceAll(value, "\n", " "), "\r", " "))
+	if len(value) > maxLen {
+		return value[:maxLen]
+	}
+	return value
+}
+
+func loadIPStates() map[string]IPState {
+	states, err := config.GetAs[map[string]IPState](securityIPStatesKey, map[string]IPState{})
+	if err != nil || states == nil {
+		return map[string]IPState{}
+	}
+	return states
+}
+
+func saveIPStates(states map[string]IPState) error {
+	return config.Set(securityIPStatesKey, states)
+}
+
+func stateKey(clientUUID, sourceIP string) string {
+	return strings.TrimSpace(clientUUID) + "|" + strings.TrimSpace(sourceIP)
+}
+
+func parseLimit(raw string, min, max int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return max
+	}
+	if n < min {
+		return min
+	}
+	if n > max {
+		return max
+	}
+	return n
+}
+
+func actorUUID(c *gin.Context) string {
+	if uuid, ok := c.Get("uuid"); ok {
+		if s, ok := uuid.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+type clientResolver struct {
+	byName map[string]string
+}
+
+func newClientResolver() clientResolver {
+	list, err := clients.GetAllClientBasicInfo()
+	if err != nil {
+		return clientResolver{byName: map[string]string{}}
+	}
+	byName := make(map[string]string, len(list))
+	count := make(map[string]int, len(list))
+	for _, client := range list {
+		count[client.Name]++
+	}
+	for _, client := range list {
+		if count[client.Name] == 1 {
+			byName[client.Name] = client.UUID
+		}
+	}
+	return clientResolver{byName: byName}
+}
+
+func (r clientResolver) UUIDByName(name string) string {
+	return r.byName[strings.TrimSpace(name)]
+}
+
+const dashboardHTML = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SSH 安全事件控制台</title>
+<style>
+:root{color-scheme:light dark;--bg:#f6f7fb;--card:#fff;--text:#172033;--muted:#657084;--line:#e7eaf1;--blue:#6157e8;--green:#1fa463;--yellow:#c88900;--red:#d83b3b}
+@media (prefers-color-scheme:dark){:root{--bg:#10131a;--card:#171b24;--text:#edf1f7;--muted:#9ca8ba;--line:#2b3140}}
+body{margin:0;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans SC",sans-serif;color:var(--text)}
+.wrap{max-width:1180px;margin:0 auto;padding:18px}
+.top{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px}
+h1{font-size:22px;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:4px}.grid{display:grid;grid-template-columns:1fr;gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:0 8px 26px rgba(20,28,45,.06)}
+.card h2{font-size:16px;margin:0 0 12px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+button{border:0;border-radius:10px;background:var(--blue);color:white;padding:8px 11px;font-weight:650;cursor:pointer}
+button.secondary{background:#8c96a8}button.danger{background:var(--red)}button.good{background:var(--green)}
+input{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:9px 10px;min-width:220px}
+.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:860px}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;font-size:13px;vertical-align:middle}th{color:var(--muted);font-weight:650}
+.tag{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700}.low{background:rgba(31,164,99,.14);color:var(--green)}.medium{background:rgba(200,137,0,.16);color:var(--yellow)}.high{background:rgba(216,59,59,.14);color:var(--red)}
+.status-active{background:rgba(97,87,232,.13);color:var(--blue)}.status-banned{background:rgba(216,59,59,.14);color:var(--red)}.status-whitelisted{background:rgba(31,164,99,.14);color:var(--green)}
+.actions{display:flex;gap:6px;flex-wrap:wrap}.events{display:flex;flex-direction:column;gap:8px}.event{border:1px solid var(--line);border-radius:12px;padding:10px}.event-top{display:flex;justify-content:space-between;gap:8px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.muted{color:var(--muted)}.err{color:var(--red)}
+@media (max-width:720px){.wrap{padding:12px}.top{align-items:flex-start;flex-direction:column}h1{font-size:20px}.card{padding:12px}input{width:100%;min-width:0}.toolbar button{flex:1}.event-top{flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><h1>🛡️ SSH 安全事件控制台</h1><div class="sub">展示 SSH Auth Guard、上下线事件；封禁为面板状态标记，不在面板执行系统命令。</div></div>
+    <div class="toolbar"><button onclick="reloadAll()">刷新</button><button class="secondary" onclick="location.href='/admin'">返回面板</button></div>
+  </div>
+  <div id="error" class="err"></div>
+  <div class="grid">
+    <section class="card">
+      <h2>SSH 攻击列表</h2>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>source_ip</th><th>user</th><th>failed_count</th><th>client</th><th>method</th><th>timestamp</th><th>risk</th><th>status</th><th>操作</th></tr></thead>
+          <tbody id="attacks"><tr><td colspan="9" class="muted">加载中...</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card">
+      <h2>实时事件流</h2>
+      <div id="events" class="events"><div class="muted">加载中...</div></div>
+    </section>
+  </div>
+</div>
+<script>
+const statusText = {active:'active', banned:'banned', whitelisted:'whitelisted'};
+function esc(s){return String(s ?? '').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+async function apiFetch(url, opts={}){
+  const res = await fetch(url, {credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...opts});
+  const data = await res.json().catch(()=>({status:'error', message:'响应不是 JSON'}));
+  if(!res.ok || data.status === 'error') throw new Error(data.message || res.statusText);
+  return data.data || {};
+}
+async function reloadAttacks(){
+  const tbody = document.getElementById('attacks');
+  const data = await apiFetch('/api/security/attacks?limit=120');
+  const rows = data.attacks || [];
+  tbody.innerHTML = rows.length ? rows.map(a =>
+    '<tr>'+
+      '<td class="mono">'+esc(a.source_ip)+'</td>'+
+      '<td>'+esc(a.user)+'</td>'+
+      '<td>'+esc(a.failed_count)+'</td>'+
+      '<td>'+esc(a.client)+'</td>'+
+      '<td>'+esc(a.method)+'</td>'+
+      '<td class="mono">'+esc(a.timestamp)+'</td>'+
+      '<td><span class="tag '+esc(a.risk)+'">'+esc(a.risk)+'</span></td>'+
+      '<td><span class="tag status-'+esc(a.status)+'">'+esc(statusText[a.status]||a.status)+'</span></td>'+
+      '<td><div class="actions">'+
+        '<button class="danger" onclick='+"'"+'act("ban", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>ban</button>'+
+        '<button class="secondary" onclick='+"'"+'act("unban", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>unban</button>'+
+        '<button class="good" onclick='+"'"+'act("whitelist", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>whitelist</button>'+
+      '</div></td>'+
+    '</tr>').join('') : '<tr><td colspan="9" class="muted">暂无 SSH 攻击事件</td></tr>';
+}
+async function reloadEvents(){
+  const box = document.getElementById('events');
+  const data = await apiFetch('/api/security/events?limit=80');
+  const rows = data.events || [];
+  box.innerHTML = rows.length ? rows.map(e =>
+    '<div class="event">'+
+      '<div class="event-top"><strong>'+esc(e.type)+'</strong><span class="mono muted">'+esc(e.timestamp)+'</span></div>'+
+      '<div>'+(e.client ? 'client：'+esc(e.client)+' · ' : '')+(e.source_ip ? 'ip：<span class="mono">'+esc(e.source_ip)+'</span> · ' : '')+(e.risk ? '<span class="tag '+esc(e.risk)+'">'+esc(e.risk)+'</span>' : '')+'</div>'+
+      '<div class="muted">'+esc(e.message)+'</div>'+
+    '</div>').join('') : '<div class="muted">暂无事件</div>';
+}
+async function act(action, ip, client){
+  if(action === 'whitelist' && !client){ alert('旧日志无法定位唯一 client，不能自动加入白名单'); return; }
+  if(!confirm(action+' '+ip+' ?')) return;
+  await apiFetch('/api/security/'+action, {method:'POST', body:JSON.stringify({ip, client})});
+  await reloadAll();
+}
+async function reloadAll(){
+  document.getElementById('error').textContent='';
+  try{ await Promise.all([reloadAttacks(), reloadEvents()]); }
+  catch(e){ document.getElementById('error').textContent=e.message; }
+}
+reloadAll();
+setInterval(reloadAll, 5000);
+</script>
+</body>
+</html>`

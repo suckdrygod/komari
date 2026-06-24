@@ -489,22 +489,27 @@ const dashboardHTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SSH 安全事件控制台</title>
 <style>
-:root{color-scheme:light dark;--bg:#f6f7fb;--card:#fff;--text:#172033;--muted:#657084;--line:#e7eaf1;--blue:#6157e8;--green:#1fa463;--yellow:#c88900;--red:#d83b3b}
-@media (prefers-color-scheme:dark){:root{--bg:#10131a;--card:#171b24;--text:#edf1f7;--muted:#9ca8ba;--line:#2b3140}}
+:root{color-scheme:light dark;--bg:#f6f7fb;--card:#fff;--text:#172033;--muted:#657084;--line:#e7eaf1;--blue:#3478f6;--purple:#6157e8;--green:#1fa463;--yellow:#c88900;--orange:#f08a24;--red:#d83b3b;--shadow:0 8px 26px rgba(20,28,45,.06)}
+@media (prefers-color-scheme:dark){:root{--bg:#10131a;--card:#171b24;--text:#edf1f7;--muted:#9ca8ba;--line:#2b3140;--shadow:0 12px 34px rgba(0,0,0,.24)}}
 body{margin:0;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans SC",sans-serif;color:var(--text)}
-.wrap{max-width:1180px;margin:0 auto;padding:18px}
+.wrap{max-width:1280px;margin:0 auto;padding:18px}
 .top{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px}
 h1{font-size:22px;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:4px}.grid{display:grid;grid-template-columns:1fr;gap:14px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:0 8px 26px rgba(20,28,45,.06)}
+.overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.metric{background:linear-gradient(180deg,var(--card),rgba(255,255,255,.72));border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:var(--shadow);position:relative;overflow:hidden}.metric:after{content:"";position:absolute;right:-28px;top:-28px;width:90px;height:90px;border-radius:999px;background:rgba(97,87,232,.07)}.metric .label{color:var(--muted);font-size:13px;font-weight:700}.metric .value{font-size:28px;font-weight:850;margin-top:8px}.metric.red{border-color:rgba(216,59,59,.22)}.metric.red .value{color:var(--red)}.metric.orange .value{color:var(--orange)}.metric.gray .value{color:var(--muted)}.metric.blue .value{color:var(--blue)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:var(--shadow)}
 .card h2{font-size:16px;margin:0 0 12px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-button{border:0;border-radius:10px;background:var(--blue);color:white;padding:8px 11px;font-weight:650;cursor:pointer}
+button{border:0;border-radius:10px;background:var(--purple);color:white;padding:8px 11px;font-weight:650;cursor:pointer;transition:transform .15s ease,opacity .15s ease,box-shadow .15s ease}button:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(20,28,45,.12)}
 button.secondary{background:#8c96a8}button.danger{background:var(--red)}button.good{background:var(--green)}
 input{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:9px 10px;min-width:220px}
-.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:860px}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;font-size:13px;vertical-align:middle}th{color:var(--muted);font-weight:650}
-.tag{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700}.low{background:rgba(31,164,99,.14);color:var(--green)}.medium{background:rgba(200,137,0,.16);color:var(--yellow)}.high{background:rgba(216,59,59,.14);color:var(--red)}
-.status-active{background:rgba(97,87,232,.13);color:var(--blue)}.status-banned{background:rgba(216,59,59,.14);color:var(--red)}.status-whitelisted{background:rgba(31,164,99,.14);color:var(--green)}
-.actions{display:flex;gap:6px;flex-wrap:wrap}.events{display:flex;flex-direction:column;gap:8px}.event{border:1px solid var(--line);border-radius:12px;padding:10px}.event-top{display:flex;justify-content:space-between;gap:8px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.muted{color:var(--muted)}.err{color:var(--red)}
-@media (max-width:720px){.wrap{padding:12px}.top{align-items:flex-start;flex-direction:column}h1{font-size:20px}.card{padding:12px}input{width:100%;min-width:0}.toolbar button{flex:1}.event-top{flex-direction:column}}
+.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:980px}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;font-size:13px;vertical-align:middle}th{color:var(--muted);font-weight:650}tbody tr{cursor:pointer;transition:background .15s ease}tbody tr:hover{background:rgba(97,87,232,.055)}tbody tr.row-banned{opacity:.64;background:rgba(101,112,132,.06)}tbody tr.row-high{box-shadow:inset 3px 0 0 var(--red)}
+.tag{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:750;white-space:nowrap}.low{background:rgba(31,164,99,.14);color:var(--green)}.medium{background:rgba(240,138,36,.18);color:var(--orange)}.high{background:rgba(216,59,59,.15);color:var(--red);box-shadow:0 0 18px rgba(216,59,59,.18)}
+.status-active{background:rgba(52,120,246,.13);color:var(--blue)}.status-banned{background:rgba(216,59,59,.14);color:var(--red)}.status-whitelisted{background:rgba(31,164,99,.14);color:var(--green)}
+.intensity-low{background:rgba(31,164,99,.12);color:var(--green)}.intensity-mid{background:rgba(240,138,36,.16);color:var(--orange)}.intensity-high{background:rgba(216,59,59,.14);color:var(--red)}
+.actions{display:flex;gap:6px;flex-wrap:wrap}.stream{display:grid;gap:8px;max-height:360px;overflow:auto;padding-right:3px}.stream-item{border:1px solid var(--line);border-radius:13px;padding:10px 12px;background:linear-gradient(90deg,rgba(52,120,246,.08),transparent)}.stream-item.high{border-color:rgba(216,59,59,.28);box-shadow:0 0 18px rgba(216,59,59,.12)}.stream-top{display:flex;justify-content:space-between;gap:8px;align-items:center}.stream-main{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:7px}.pulse{position:relative}.pulse:before{content:"";display:inline-block;width:7px;height:7px;border-radius:99px;background:var(--blue);margin-right:6px;box-shadow:0 0 0 0 rgba(52,120,246,.58);animation:pulse 1.6s infinite}@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(52,120,246,0)}100%{box-shadow:0 0 0 0 rgba(52,120,246,0)}}
+.events{display:flex;flex-direction:column;gap:8px}.event{border:1px solid var(--line);border-radius:12px;padding:10px}.event-top{display:flex;justify-content:space-between;gap:8px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.muted{color:var(--muted)}.err{color:var(--red);margin-bottom:10px}
+.drawer-mask{position:fixed;inset:0;background:rgba(8,12,20,.42);display:none;z-index:20}.drawer{position:fixed;right:0;top:0;height:100vh;width:min(520px,92vw);background:var(--card);border-left:1px solid var(--line);box-shadow:-18px 0 40px rgba(0,0,0,.22);transform:translateX(102%);transition:transform .22s ease;z-index:21;overflow:auto}.drawer.open{transform:translateX(0)}.drawer-mask.open{display:block}.drawer-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:18px;border-bottom:1px solid var(--line)}.drawer-body{padding:16px;display:grid;gap:14px}.kv{display:grid;grid-template-columns:120px 1fr;gap:8px;font-size:13px}.mini-card{border:1px solid var(--line);border-radius:14px;padding:12px}.timeline{display:grid;gap:8px}.timeline-item{border-left:3px solid var(--blue);padding-left:10px}.chart{width:100%;height:120px}.close{background:#8c96a8}.nowrap{white-space:nowrap}
+@media (max-width:900px){.overview{grid-template-columns:repeat(2,minmax(0,1fr))}.stream-top{align-items:flex-start;flex-direction:column}}
+@media (max-width:720px){.wrap{padding:12px}.top{align-items:flex-start;flex-direction:column}h1{font-size:20px}.card{padding:12px}.overview{grid-template-columns:1fr}input{width:100%;min-width:0}.toolbar button{flex:1}.event-top{flex-direction:column}.kv{grid-template-columns:92px 1fr}.metric .value{font-size:24px}}
 </style>
 </head>
 <body>
@@ -514,13 +519,23 @@ input{border:1px solid var(--line);background:var(--card);color:var(--text);bord
     <div class="toolbar"><button onclick="reloadAll()">刷新</button><button class="secondary" onclick="location.href='/admin'">返回面板</button></div>
   </div>
   <div id="error" class="err"></div>
+  <section class="overview" aria-label="安全概览">
+    <div class="metric red"><div class="label">🔴 高风险 IP数量</div><div id="metric-high" class="value">--</div></div>
+    <div class="metric blue"><div class="label">🟠 正在攻击 IP</div><div id="metric-active" class="value">--</div></div>
+    <div class="metric gray"><div class="label">🚫 已封禁 IP数量</div><div id="metric-banned" class="value">--</div></div>
+    <div class="metric orange"><div class="label">📊 今日攻击次数</div><div id="metric-today" class="value">--</div></div>
+  </section>
   <div class="grid">
     <section class="card">
-      <h2>SSH 攻击列表</h2>
+      <h2>最近攻击流</h2>
+      <div id="stream" class="stream"><div class="muted">加载中...</div></div>
+    </section>
+    <section class="card">
+      <h2>IP 攻击列表</h2>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>来源 IP</th><th>目标用户</th><th>失败次数</th><th>节点</th><th>认证方式</th><th>时间</th><th>风险</th><th>状态</th><th>操作</th></tr></thead>
-          <tbody id="attacks"><tr><td colspan="9" class="muted">加载中...</td></tr></tbody>
+          <thead><tr><th>来源 IP</th><th>目标用户</th><th>失败次数</th><th>攻击强度</th><th>节点</th><th>认证方式</th><th>时间</th><th>风险</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="attacks"><tr><td colspan="10" class="muted">加载中...</td></tr></tbody>
         </table>
       </div>
     </section>
@@ -530,6 +545,14 @@ input{border:1px solid var(--line);background:var(--card);color:var(--text);bord
     </section>
   </div>
 </div>
+<div id="drawerMask" class="drawer-mask" onclick="closeDrawer()"></div>
+<aside id="drawer" class="drawer" aria-label="IP 详情">
+  <div class="drawer-head">
+    <div><h2 id="drawerTitle" style="margin:0;font-size:18px">IP 详情</h2><div id="drawerSub" class="muted"></div></div>
+    <button class="close" onclick="closeDrawer()">关闭</button>
+  </div>
+  <div id="drawerBody" class="drawer-body"></div>
+</aside>
 <script>
 const statusText = {active:'活跃', banned:'已标记封禁', whitelisted:'白名单'};
 const riskText = {low:'低', medium:'中', high:'高'};
@@ -542,6 +565,8 @@ const eventTypeText = {
   OfflineSendFailed:'离线通知发送失败',
   OnlineSendFailed:'恢复通知发送失败',
 };
+let attackRows = [];
+let eventRows = [];
 function esc(s){return String(s ?? '').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 async function apiFetch(url, opts={}){
   const res = await fetch(url, {credentials:'same-origin', headers:{'Content-Type':'application/json'}, ...opts});
@@ -549,37 +574,100 @@ async function apiFetch(url, opts={}){
   if(!res.ok || data.status === 'error') throw new Error(data.message || res.statusText);
   return data.data || {};
 }
+function toTime(s){const t = Date.parse(s || ''); return Number.isFinite(t) ? t : 0;}
+function riskScore(a){
+  if((a.status || '') === 'whitelisted') return 10;
+  if((a.status || '') === 'banned') return 70;
+  const base = a.risk === 'high' ? 90 : (a.risk === 'medium' ? 62 : 28);
+  return Math.min(100, base + Math.min(15, Number(a.failed_count || 0)));
+}
+function riskLabel(a){
+  const label = riskText[a.risk] || a.risk || '未知';
+  return a.risk === 'high' ? '🔥 '+label : label;
+}
+function intensity(a){
+  const n = Number(a.failed_count || 0);
+  if(n >= 20) return {cls:'intensity-high', text:'猛烈'};
+  if(n >= 10) return {cls:'intensity-high', text:'较强'};
+  if(n >= 5) return {cls:'intensity-mid', text:'持续'};
+  return {cls:'intensity-low', text:'轻微'};
+}
+function sortedAttacks(rows){
+  return [...rows].sort((a,b) => riskScore(b)-riskScore(a) || Number(b.failed_count||0)-Number(a.failed_count||0) || toTime(b.timestamp)-toTime(a.timestamp));
+}
+function isToday(ts){
+  const d = new Date(ts || '');
+  if(Number.isNaN(d.getTime())) return false;
+  const now = new Date();
+  return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+}
+function updateOverview(rows){
+  const unique = new Map();
+  rows.forEach(a => unique.set((a.client_uuid || a.client || '')+'|'+a.source_ip, a));
+  const list = [...unique.values()];
+  document.getElementById('metric-high').textContent = list.filter(a => riskScore(a) >= 80).length;
+  document.getElementById('metric-active').textContent = list.filter(a => a.status === 'active').length;
+  document.getElementById('metric-banned').textContent = list.filter(a => a.status === 'banned').length;
+  document.getElementById('metric-today').textContent = rows.filter(a => isToday(a.timestamp)).reduce((n,a)=>n+Number(a.failed_count||0),0);
+}
 async function reloadAttacks(){
   const tbody = document.getElementById('attacks');
   const data = await apiFetch('/api/security/attacks?limit=120');
-  const rows = data.attacks || [];
-  tbody.innerHTML = rows.length ? rows.map(a =>
-    '<tr>'+
+  attackRows = sortedAttacks(data.attacks || []);
+  updateOverview(attackRows);
+  renderStream();
+  tbody.innerHTML = attackRows.length ? attackRows.map(a => {
+    const inten = intensity(a);
+    const rowClass = (a.status === 'banned' ? 'row-banned ' : '') + (a.risk === 'high' ? 'row-high' : '');
+    return '<tr class="'+esc(rowClass)+'" onclick='+"'"+'openDrawer('+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid || a.client || '')+')'+"'"+'>'+
       '<td class="mono">'+esc(a.source_ip)+'</td>'+
       '<td>'+esc(a.user)+'</td>'+
       '<td>'+esc(a.failed_count)+'</td>'+
+      '<td><span class="tag '+inten.cls+'">'+esc(inten.text)+'</span></td>'+
       '<td>'+esc(a.client)+'</td>'+
       '<td>'+esc(a.method)+'</td>'+
       '<td class="mono">'+esc(a.timestamp)+'</td>'+
-      '<td><span class="tag '+esc(a.risk)+'">'+esc(riskText[a.risk]||a.risk)+'</span></td>'+
+      '<td><span class="tag '+esc(a.risk)+'">'+esc(riskLabel(a))+'</span></td>'+
       '<td><span class="tag status-'+esc(a.status)+'">'+esc(statusText[a.status]||a.status)+'</span></td>'+
       '<td><div class="actions">'+
-        '<button class="danger" onclick='+"'"+'act("ban", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>标记封禁</button>'+
-        '<button class="secondary" onclick='+"'"+'act("unban", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>解除标记</button>'+
-        '<button class="good" onclick='+"'"+'act("whitelist", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>加入白名单</button>'+
+        '<button class="danger" title="立即封禁该IP" onclick='+"'"+'event.stopPropagation();act("ban", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>🚫 Ban IP</button>'+
+        '<button class="secondary" title="解除面板封禁标记" onclick='+"'"+'event.stopPropagation();act("unban", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>🔓 Unban</button>'+
+        '<button class="good" title="加入白名单，跳过检测" onclick='+"'"+'event.stopPropagation();act("whitelist", '+JSON.stringify(a.source_ip)+', '+JSON.stringify(a.client_uuid)+')'+"'"+'>⭐ Whitelist</button>'+
       '</div></td>'+
-    '</tr>').join('') : '<tr><td colspan="9" class="muted">暂无 SSH 攻击事件</td></tr>';
+    '</tr>';
+  }).join('') : '<tr><td colspan="10" class="muted">暂无 SSH 攻击事件</td></tr>';
 }
 async function reloadEvents(){
   const box = document.getElementById('events');
   const data = await apiFetch('/api/security/events?limit=80');
-  const rows = data.events || [];
-  box.innerHTML = rows.length ? rows.map(e =>
+  eventRows = data.events || [];
+  renderStream();
+  box.innerHTML = eventRows.length ? eventRows.map(e =>
     '<div class="event">'+
       '<div class="event-top"><strong>'+esc(eventTypeText[e.type]||e.type)+'</strong><span class="mono muted">'+esc(e.timestamp)+'</span></div>'+
       '<div>'+(e.client ? '节点：'+esc(e.client)+' · ' : '')+(e.source_ip ? '来源 IP：<span class="mono">'+esc(e.source_ip)+'</span> · ' : '')+(e.risk ? '<span class="tag '+esc(e.risk)+'">'+esc(riskText[e.risk]||e.risk)+'</span>' : '')+'</div>'+
       '<div class="muted">'+esc(e.message)+'</div>'+
     '</div>').join('') : '<div class="muted">暂无事件</div>';
+}
+function renderStream(){
+  const box = document.getElementById('stream');
+  if(!box) return;
+  let rows = eventRows.filter(e => e.type === 'SSHAuthGuardAlert');
+  if(!rows.length) rows = attackRows;
+  rows = [...rows].sort((a,b)=>toTime(b.timestamp)-toTime(a.timestamp)).slice(0,18);
+  box.innerHTML = rows.length ? rows.map(e => {
+    const st = e.status || 'active';
+    const high = (e.risk === 'high' || riskScore(e) >= 80) ? ' high' : '';
+    return '<div class="stream-item'+high+'" onclick='+"'"+'openDrawer('+JSON.stringify(e.source_ip)+', '+JSON.stringify(e.client_uuid || e.client || '')+')'+"'"+'>'+
+      '<div class="stream-top"><strong class="mono">'+esc(e.timestamp)+'</strong><span class="tag status-'+esc(st)+' '+(st === 'active' ? 'pulse' : '')+'">'+esc(statusText[st]||st)+'</span></div>'+
+      '<div class="stream-main">'+
+        '<span class="mono">'+esc(e.source_ip)+'</span>'+
+        '<span>用户：'+esc(e.user || '-')+'</span>'+
+        '<span>方式：'+esc(e.method || '-')+'</span>'+
+        '<span>失败：<strong>'+esc(e.failed_count || 0)+'</strong></span>'+
+        (e.risk ? '<span class="tag '+esc(e.risk)+'">'+esc(riskLabel(e))+'</span>' : '')+
+      '</div></div>';
+  }).join('') : '<div class="muted">暂无攻击流</div>';
 }
 async function act(action, ip, client){
   if(action === 'whitelist' && !client){ alert('旧日志无法定位唯一 client，不能自动加入白名单'); return; }
@@ -587,6 +675,45 @@ async function act(action, ip, client){
   if(!confirm(actionText+' '+ip+' ?')) return;
   await apiFetch('/api/security/'+action, {method:'POST', body:JSON.stringify({ip, client})});
   await reloadAll();
+}
+function openDrawer(ip, clientKey){
+  const item = attackRows.find(a => a.source_ip === ip && ((a.client_uuid || a.client || '') === clientKey)) || attackRows.find(a => a.source_ip === ip);
+  if(!item) return;
+  const relatedAttacks = attackRows.filter(a => a.source_ip === ip && (!item.client_uuid || a.client_uuid === item.client_uuid || a.client === item.client));
+  const relatedEvents = eventRows.filter(e => e.source_ip === ip && (!item.client_uuid || e.client_uuid === item.client_uuid || e.client === item.client)).sort((a,b)=>toTime(b.timestamp)-toTime(a.timestamp));
+  const users = [...new Set(relatedAttacks.flatMap(a => String(a.user || '').split(',').map(s=>s.trim()).filter(Boolean)).concat(relatedEvents.flatMap(e => String(e.user || '').split(',').map(s=>s.trim()).filter(Boolean))))];
+  const points = relatedEvents.filter(e => e.failed_count).slice(0,12).reverse();
+  const scores = points.length ? points.map(e => Math.min(100, Number(e.failed_count || 0) * 10)) : [riskScore(item)];
+  document.getElementById('drawerTitle').textContent = item.source_ip;
+  document.getElementById('drawerSub').textContent = item.client || '未知节点';
+  document.getElementById('drawerBody').innerHTML =
+    '<div class="mini-card"><h3 style="margin-top:0">IP 基本信息</h3>'+
+      kv('来源 IP', '<span class="mono">'+esc(item.source_ip)+'</span>')+
+      kv('节点', esc(item.client || '-'))+
+      kv('认证方式', esc(item.method || '-'))+
+      kv('失败次数', esc(item.failed_count || 0))+
+      kv('风险等级', '<span class="tag '+esc(item.risk)+'">'+esc(riskLabel(item))+'</span>')+
+      kv('封禁状态', '<span class="tag status-'+esc(item.status)+'">'+esc(statusText[item.status]||item.status)+'</span>')+
+      kv('白名单状态', item.status === 'whitelisted' ? '已加入白名单' : '未命中白名单')+
+    '</div>'+
+    '<div class="mini-card"><h3 style="margin-top:0">用户尝试列表</h3><div>'+esc(users.join(', ') || '-')+'</div></div>'+
+    '<div class="mini-card"><h3 style="margin-top:0">风险评分变化曲线</h3>'+sparkline(scores)+'</div>'+
+    '<div class="mini-card"><h3 style="margin-top:0">攻击时间线</h3><div class="timeline">'+
+      (relatedEvents.length ? relatedEvents.slice(0,12).map(e => '<div class="timeline-item"><div><strong>'+esc(eventTypeText[e.type]||e.type)+'</strong> <span class="mono muted">'+esc(e.timestamp)+'</span></div><div class="muted">'+esc(e.user || '-')+' · '+esc(e.method || '-')+' · 失败 '+esc(e.failed_count || 0)+'</div></div>').join('') : '<div class="muted">暂无更细事件</div>')+
+    '</div></div>';
+  document.getElementById('drawerMask').classList.add('open');
+  document.getElementById('drawer').classList.add('open');
+}
+function closeDrawer(){
+  document.getElementById('drawerMask').classList.remove('open');
+  document.getElementById('drawer').classList.remove('open');
+}
+function kv(k,v){return '<div class="kv"><strong>'+esc(k)+'</strong><div>'+v+'</div></div>'}
+function sparkline(values){
+  const max = Math.max(100, ...values);
+  const step = values.length > 1 ? 300/(values.length-1) : 300;
+  const pts = values.map((v,i)=> (10+i*step)+','+(105-(Number(v||0)/max)*90)).join(' ');
+  return '<svg class="chart" viewBox="0 0 320 120" role="img" aria-label="风险评分变化曲线"><polyline points="'+esc(pts)+'" fill="none" stroke="#d83b3b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="10" y1="105" x2="310" y2="105" stroke="currentColor" opacity=".14"/><line x1="10" y1="15" x2="10" y2="105" stroke="currentColor" opacity=".14"/></svg>';
 }
 async function reloadAll(){
   document.getElementById('error').textContent='';

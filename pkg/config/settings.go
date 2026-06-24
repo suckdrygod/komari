@@ -35,7 +35,8 @@ type Settings struct {
 	// 通知
 	NotificationEnabled        bool     `json:"notification_enabled" default:"true"` // 通知总开关
 	NotificationMethod         string   `json:"notification_method" default:"none"`
-	NotificationMethods        []string `json:"notification_methods"` // 多通知通道；未设置时兼容 notification_method
+	NotificationMethods        []string `json:"notification_methods"`                      // 多通知通道；未设置时兼容 notification_method
+	SSHAuthGuardSilentMode     bool     `json:"ssh_auth_guard_silent_mode" default:"true"` // SSH 爆破告警静默模式：只记录到后台，不推送通知
 	NotificationTemplate       string   `json:"notification_template" default:"{{emoji}}{{emoji}}{{emoji}}\nEvent: {{event}}\nClients: {{client}}\nMessage: {{message}}\nTime: {{time}}"`
 	ExpireNotificationEnabled  bool     `json:"expire_notification_enabled" default:"true"` // 是否启用过期通知
 	ExpireNotificationLeadDays int      `json:"expire_notification_lead_days" default:"7"`  // 过期前多少天通知，默认7天
@@ -76,6 +77,7 @@ const (
 	NotificationEnabledKey        = "notification_enabled"
 	NotificationMethodKey         = "notification_method"
 	NotificationMethodsKey        = "notification_methods"
+	SSHAuthGuardSilentModeKey     = "ssh_auth_guard_silent_mode"
 	NotificationTemplateKey       = "notification_template"
 	ExpireNotificationEnabledKey  = "expire_notification_enabled"
 	ExpireNotificationLeadDaysKey = "expire_notification_lead_days"

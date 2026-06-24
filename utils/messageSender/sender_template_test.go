@@ -155,6 +155,21 @@ func TestSendEventToProvidersSendsSSHAuthGuardToEveryProvider(t *testing.T) {
 	assertNotContains(t, email.lastMessage, "SSH 会话已成功建立")
 }
 
+func TestShouldSilenceSSHAuthGuardEventOnlyAffectsAuthGuardAlerts(t *testing.T) {
+	if !shouldSilenceSSHAuthGuardEvent(models.EventMessage{Event: "SSH 爆破告警"}, true) {
+		t.Fatal("expected SSH auth guard alert to be silenced when silent mode is enabled")
+	}
+	if shouldSilenceSSHAuthGuardEvent(models.EventMessage{Event: "SSH 登录成功"}, true) {
+		t.Fatal("SSH login success notifications must not be silenced by auth guard silent mode")
+	}
+	if shouldSilenceSSHAuthGuardEvent(models.EventMessage{Event: "Offline"}, true) {
+		t.Fatal("offline notifications must not be silenced by auth guard silent mode")
+	}
+	if shouldSilenceSSHAuthGuardEvent(models.EventMessage{Event: "SSH 爆破告警"}, false) {
+		t.Fatal("auth guard alert must not be silenced when silent mode is disabled")
+	}
+}
+
 type fakeSender struct {
 	name        string
 	textErr     error

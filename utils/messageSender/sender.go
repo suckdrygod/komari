@@ -200,8 +200,9 @@ func SendEvent(event models.EventMessage) error {
 	}
 	var err error
 	cfg, err := config.GetMany(map[string]any{
-		config.NotificationEnabledKey:  false,
-		config.NotificationTemplateKey: "{{emoji}}{{emoji}}{{emoji}}\nEvent: {{event}}\nClients: {{client}}\nMessage: {{message}}\nTime: {{time}}",
+		config.NotificationEnabledKey:    false,
+		config.NotificationTemplateKey:   "{{emoji}}{{emoji}}{{emoji}}\nEvent: {{event}}\nClients: {{client}}\nMessage: {{message}}\nTime: {{time}}",
+		config.SSHAuthGuardSilentModeKey: true,
 	})
 	if err != nil {
 		return err
@@ -209,11 +210,20 @@ func SendEvent(event models.EventMessage) error {
 	if !cfg[config.NotificationEnabledKey].(bool) {
 		return nil
 	}
+	if shouldSilenceSSHAuthGuardEvent(event, cfg[config.SSHAuthGuardSilentModeKey]) {
+		auditlog.EventLog("info", "SSH auth guard alert notification suppressed: reason=silent_mode")
+		return nil
+	}
 	if len(providers) == 0 {
 		return nil
 	}
 	messageTemplate := cfg[config.NotificationTemplateKey].(string)
 	return sendEventToProviders(providers, event, messageTemplate, auditlog.Log)
+}
+
+func shouldSilenceSSHAuthGuardEvent(event models.EventMessage, silentMode any) bool {
+	enabled, ok := silentMode.(bool)
+	return ok && enabled && event.Event == "SSH 爆破告警"
 }
 
 type auditLogger func(ip, uuid, message, msgType string)

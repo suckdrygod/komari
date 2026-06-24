@@ -14,6 +14,7 @@ import (
 	"github.com/komari-monitor/komari/database/clients"
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/models"
+	"github.com/komari-monitor/komari/database/securityactions"
 	"github.com/komari-monitor/komari/database/sshlogin"
 	"github.com/komari-monitor/komari/pkg/config"
 	"github.com/komari-monitor/komari/web/api"
@@ -65,9 +66,10 @@ type SecurityEvent struct {
 }
 
 type securityActionRequest struct {
-	IP     string `json:"ip"`
-	Client string `json:"client"`
-	Reason string `json:"reason"`
+	IP       string `json:"ip"`
+	Client   string `json:"client"`
+	Reason   string `json:"reason"`
+	Duration int    `json:"duration"`
 }
 
 func Dashboard(c *gin.Context) {
@@ -129,6 +131,16 @@ func BanIP(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if strings.Contains(req.IP, "/") {
+		api.RespondError(c, http.StatusBadRequest, "ban only supports a single IP")
+		return
+	}
+	if req.Client != "" {
+		if notification, err := sshlogin.GetNotification(req.Client); err == nil && notification.IsIPWhitelisted(req.IP) {
+			api.RespondError(c, http.StatusBadRequest, "IP is whitelisted for this client")
+			return
+		}
+	}
 	states := loadIPStates()
 	key := stateKey(req.Client, req.IP)
 	states[key] = IPState{
@@ -142,13 +154,29 @@ func BanIP(c *gin.Context) {
 		api.RespondError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard ban ip=%s client=%s mode=panel_mark_only", req.IP, req.Client), "warn")
-	api.RespondSuccess(c, gin.H{"status": "banned", "mode": "panel_mark_only"})
+	resp := gin.H{"status": "banned", "mode": "panel_mark_only"}
+	if req.Client != "" {
+		action, err := securityactions.Enqueue(req.Client, req.IP, securityactions.ActionBan, normalizeDuration(req.Duration))
+		if err != nil {
+			api.RespondError(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		resp["mode"] = "agent_action_queued"
+		resp["action"] = action
+		auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard ban ip=%s client=%s action_id=%s mode=agent_action_queued", req.IP, req.Client, action.ID), "warn")
+	} else {
+		auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard ban ip=%s client=%s mode=panel_mark_only", req.IP, req.Client), "warn")
+	}
+	api.RespondSuccess(c, resp)
 }
 
 func UnbanIP(c *gin.Context) {
 	req, ok := bindAction(c)
 	if !ok {
+		return
+	}
+	if strings.Contains(req.IP, "/") {
+		api.RespondError(c, http.StatusBadRequest, "unban only supports a single IP")
 		return
 	}
 	states := loadIPStates()
@@ -158,8 +186,20 @@ func UnbanIP(c *gin.Context) {
 		api.RespondError(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard unban ip=%s client=%s mode=panel_mark_only", req.IP, req.Client), "warn")
-	api.RespondSuccess(c, gin.H{"status": "active", "mode": "panel_mark_only"})
+	resp := gin.H{"status": "active", "mode": "panel_mark_only"}
+	if req.Client != "" {
+		action, err := securityactions.Enqueue(req.Client, req.IP, securityactions.ActionUnban, normalizeDuration(req.Duration))
+		if err != nil {
+			api.RespondError(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		resp["mode"] = "agent_action_queued"
+		resp["action"] = action
+		auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard unban ip=%s client=%s action_id=%s mode=agent_action_queued", req.IP, req.Client, action.ID), "warn")
+	} else {
+		auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard unban ip=%s client=%s mode=panel_mark_only", req.IP, req.Client), "warn")
+	}
+	api.RespondSuccess(c, resp)
 }
 
 func WhitelistIP(c *gin.Context) {
@@ -188,6 +228,11 @@ func WhitelistIP(c *gin.Context) {
 	if err := sshlogin.EditNotifications([]models.SSHLoginNotification{notification}); err != nil {
 		api.RespondError(c, http.StatusBadRequest, err.Error())
 		return
+	}
+	if !strings.Contains(entry, "/") {
+		if action, err := securityactions.Enqueue(req.Client, entry, securityactions.ActionUnban, normalizeDuration(req.Duration)); err == nil {
+			auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard whitelist ip=%s client=%s queued_unban_action=%s", entry, req.Client, action.ID), "warn")
+		}
 	}
 	auditlog.Log(c.ClientIP(), actorUUID(c), fmt.Sprintf("security dashboard whitelist ip=%s client=%s", entry, req.Client), "warn")
 	api.RespondSuccess(c, gin.H{"status": "whitelisted"})
@@ -456,6 +501,19 @@ func actorUUID(c *gin.Context) string {
 	return ""
 }
 
+func normalizeDuration(duration int) int {
+	if duration <= 0 {
+		return 3600
+	}
+	if duration < 30 {
+		return 30
+	}
+	if duration > 86400 {
+		return 86400
+	}
+	return duration
+}
+
 type clientResolver struct {
 	byName map[string]string
 }
@@ -515,7 +573,7 @@ input{border:1px solid var(--line);background:var(--card);color:var(--text);bord
 <body>
 <div class="wrap">
   <div class="top">
-    <div><h1>🛡️ SSH 安全事件控制台</h1><div class="sub">展示 SSH Auth Guard、上下线事件；封禁为面板状态标记，不在面板执行系统命令。</div></div>
+    <div><h1>🛡️ SSH 安全事件控制台</h1><div class="sub">展示 SSH Auth Guard、上下线事件；封禁会投递固定 ban/unban 动作给对应 agent，面板不执行系统命令。</div></div>
     <div class="toolbar"><button onclick="reloadAll()">刷新</button><button class="secondary" onclick="location.href='/admin'">返回面板</button></div>
   </div>
   <div id="error" class="err"></div>

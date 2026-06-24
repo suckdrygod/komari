@@ -547,48 +547,72 @@ const dashboardHTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SSH 安全事件控制台</title>
 <style>
-:root{color-scheme:light dark;--bg:#f6f7fb;--card:#fff;--text:#172033;--muted:#657084;--line:#e7eaf1;--blue:#3478f6;--purple:#6157e8;--green:#1fa463;--yellow:#c88900;--orange:#f08a24;--red:#d83b3b;--shadow:0 8px 26px rgba(20,28,45,.06)}
-@media (prefers-color-scheme:dark){:root{--bg:#10131a;--card:#171b24;--text:#edf1f7;--muted:#9ca8ba;--line:#2b3140;--shadow:0 12px 34px rgba(0,0,0,.24)}}
-body{margin:0;background:var(--bg);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans SC",sans-serif;color:var(--text)}
-.wrap{max-width:1280px;margin:0 auto;padding:18px}
-.top{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px}
-h1{font-size:22px;margin:0}.sub{color:var(--muted);font-size:13px;margin-top:4px}.grid{display:grid;grid-template-columns:1fr;gap:14px}
-.overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.metric{background:linear-gradient(180deg,var(--card),rgba(255,255,255,.72));border:1px solid var(--line);border-radius:18px;padding:14px;box-shadow:var(--shadow);position:relative;overflow:hidden}.metric:after{content:"";position:absolute;right:-28px;top:-28px;width:90px;height:90px;border-radius:999px;background:rgba(97,87,232,.07)}.metric .label{color:var(--muted);font-size:13px;font-weight:700}.metric .value{font-size:28px;font-weight:850;margin-top:8px}.metric.red{border-color:rgba(216,59,59,.22)}.metric.red .value{color:var(--red)}.metric.orange .value{color:var(--orange)}.metric.gray .value{color:var(--muted)}.metric.blue .value{color:var(--blue)}
-.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;box-shadow:var(--shadow)}
-.card h2{font-size:16px;margin:0 0 12px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.section-head{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;margin-bottom:12px}.section-head h2{margin:0 0 4px}.hint{color:var(--muted);font-size:12px}.filterbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.filter-input{min-width:260px}
-button{border:0;border-radius:10px;background:var(--purple);color:white;padding:8px 11px;font-weight:650;cursor:pointer;transition:transform .15s ease,opacity .15s ease,box-shadow .15s ease}button:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(20,28,45,.12)}
-button.secondary{background:#8c96a8}button.danger{background:var(--red)}button.good{background:var(--green)}
-input{border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:10px;padding:9px 10px;min-width:220px}
-.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:980px}th,td{border-bottom:1px solid var(--line);padding:10px;text-align:left;font-size:13px;vertical-align:middle}th{color:var(--muted);font-weight:650}tbody tr{cursor:pointer;transition:background .15s ease}tbody tr:hover{background:rgba(97,87,232,.055)}tbody tr.row-banned{opacity:.64;background:rgba(101,112,132,.06)}tbody tr.row-high{box-shadow:inset 3px 0 0 var(--red)}
-.tag{display:inline-block;border-radius:999px;padding:3px 8px;font-size:12px;font-weight:750;white-space:nowrap}.low{background:rgba(31,164,99,.14);color:var(--green)}.medium{background:rgba(240,138,36,.18);color:var(--orange)}.high{background:rgba(216,59,59,.15);color:var(--red);box-shadow:0 0 18px rgba(216,59,59,.18)}
-.status-active{background:rgba(52,120,246,.13);color:var(--blue)}.status-banned{background:rgba(216,59,59,.14);color:var(--red)}.status-whitelisted{background:rgba(31,164,99,.14);color:var(--green)}
-.intensity-low{background:rgba(31,164,99,.12);color:var(--green)}.intensity-mid{background:rgba(240,138,36,.16);color:var(--orange)}.intensity-high{background:rgba(216,59,59,.14);color:var(--red)}
-.actions{display:flex;gap:6px;flex-wrap:wrap}.stream{display:grid;gap:8px;max-height:360px;overflow:auto;padding-right:3px}.stream-item{border:1px solid var(--line);border-radius:13px;padding:10px 12px;background:linear-gradient(90deg,rgba(52,120,246,.08),transparent)}.stream-item.high{border-color:rgba(216,59,59,.28);box-shadow:0 0 18px rgba(216,59,59,.12)}.stream-top{display:flex;justify-content:space-between;gap:8px;align-items:center}.stream-main{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:7px}.pulse{position:relative}.pulse:before{content:"";display:inline-block;width:7px;height:7px;border-radius:99px;background:var(--blue);margin-right:6px;box-shadow:0 0 0 0 rgba(52,120,246,.58);animation:pulse 1.6s infinite}@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(52,120,246,0)}100%{box-shadow:0 0 0 0 rgba(52,120,246,0)}}
-.events{display:flex;flex-direction:column;gap:8px}.event{border:1px solid var(--line);border-radius:12px;padding:10px}.event-top{display:flex;justify-content:space-between;gap:8px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.muted{color:var(--muted)}.err{color:var(--red);margin-bottom:10px}
-.drawer-mask{position:fixed;inset:0;background:rgba(8,12,20,.42);display:none;z-index:20}.drawer{position:fixed;right:0;top:0;height:100vh;width:min(520px,92vw);background:var(--card);border-left:1px solid var(--line);box-shadow:-18px 0 40px rgba(0,0,0,.22);transform:translateX(102%);transition:transform .22s ease;z-index:21;overflow:auto}.drawer.open{transform:translateX(0)}.drawer-mask.open{display:block}.drawer-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:18px;border-bottom:1px solid var(--line)}.drawer-body{padding:16px;display:grid;gap:14px}.kv{display:grid;grid-template-columns:120px 1fr;gap:8px;font-size:13px}.mini-card{border:1px solid var(--line);border-radius:14px;padding:12px}.timeline{display:grid;gap:8px}.timeline-item{border-left:3px solid var(--blue);padding-left:10px}.chart{width:100%;height:120px}.close{background:#8c96a8}.nowrap{white-space:nowrap}
-@media (max-width:900px){.overview{grid-template-columns:repeat(2,minmax(0,1fr))}.stream-top{align-items:flex-start;flex-direction:column}}
-@media (max-width:720px){.wrap{padding:12px}.top{align-items:flex-start;flex-direction:column}h1{font-size:20px}.card{padding:12px}.overview{grid-template-columns:1fr}input{width:100%;min-width:0}.toolbar button{flex:1}.section-head{flex-direction:column}.filterbar{width:100%}.filterbar button{flex:1}.event-top{flex-direction:column}.kv{grid-template-columns:92px 1fr}.metric .value{font-size:24px}}
+:root{color-scheme:dark;--bg:#050912;--panel:#08101b;--card:#0b1420;--card2:#0e1a2a;--text:#e8f1ff;--muted:#7f8da5;--line:rgba(123,151,190,.18);--line2:rgba(75,103,150,.28);--blue:#4f83ff;--cyan:#26d6ff;--purple:#7567ff;--green:#13c76b;--yellow:#f6c453;--orange:#ff9f1a;--red:#ff4d57;--shadow:0 20px 70px rgba(0,0,0,.38);--glow:0 0 34px rgba(38,214,255,.12)}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:
+radial-gradient(circle at 10% -10%,rgba(77,120,255,.18),transparent 32%),
+radial-gradient(circle at 86% 4%,rgba(38,214,255,.12),transparent 30%),
+linear-gradient(180deg,#050912 0%,#07101b 48%,#04070d 100%);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans SC",sans-serif;color:var(--text)}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;background-image:linear-gradient(rgba(79,131,255,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(79,131,255,.05) 1px,transparent 1px);background-size:46px 46px;mask-image:linear-gradient(to bottom,rgba(0,0,0,.8),transparent 82%)}body:after{content:"";position:fixed;inset:0;pointer-events:none;background:linear-gradient(180deg,transparent,rgba(38,214,255,.025) 50%,transparent);mix-blend-mode:screen}
+.shell{display:grid;grid-template-columns:236px minmax(0,1fr);gap:18px;max-width:1540px;margin:0 auto;padding:18px}.side{position:sticky;top:18px;height:calc(100vh - 36px);border:1px solid var(--line);background:linear-gradient(180deg,rgba(12,22,36,.86),rgba(7,13,23,.74));border-radius:22px;padding:16px;box-shadow:var(--shadow);backdrop-filter:blur(18px)}.brand{display:flex;gap:10px;align-items:center;padding:4px 2px 18px;border-bottom:1px solid var(--line)}.brand-badge{width:38px;height:38px;border-radius:13px;display:grid;place-items:center;background:linear-gradient(135deg,rgba(117,103,255,.28),rgba(38,214,255,.12));border:1px solid rgba(38,214,255,.28);box-shadow:0 0 24px rgba(117,103,255,.22)}.brand-title{font-size:17px;font-weight:900;letter-spacing:.2px}.brand-sub{font-size:11px;color:var(--muted);margin-top:2px}.nav{display:grid;gap:8px;margin-top:16px}.nav-item{display:flex;align-items:center;gap:9px;color:var(--muted);padding:10px 11px;border-radius:12px;border:1px solid transparent}.nav-item.active{color:#fff;background:linear-gradient(90deg,rgba(117,103,255,.32),rgba(38,214,255,.08));border-color:rgba(117,103,255,.38);box-shadow:inset 3px 0 0 var(--purple)}.side-foot{position:absolute;left:16px;right:16px;bottom:16px;border-top:1px solid var(--line);padding-top:13px;color:var(--muted);font-size:12px;line-height:1.55}
+.wrap{min-width:0}.top{display:flex;gap:14px;align-items:flex-start;justify-content:space-between;margin-bottom:16px;padding:16px 18px;border:1px solid var(--line);border-radius:22px;background:linear-gradient(135deg,rgba(11,20,32,.82),rgba(8,16,27,.58));box-shadow:var(--shadow);backdrop-filter:blur(18px)}h1{font-size:24px;margin:0;letter-spacing:.3px}.sub{color:var(--muted);font-size:13px;margin-top:7px}.top-meta{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:10px}.chip{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line2);border-radius:999px;padding:6px 10px;color:#b7c8e8;background:rgba(10,21,36,.64);font-size:12px}.grid{display:grid;grid-template-columns:1.06fr .94fr;gap:14px}.wide{grid-column:1/-1}.overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:14px}.metric{background:linear-gradient(150deg,rgba(13,26,42,.94),rgba(8,17,30,.84));border:1px solid var(--line);border-radius:20px;padding:15px;box-shadow:var(--shadow),var(--glow);position:relative;overflow:hidden;min-height:118px}.metric:before{content:"";position:absolute;inset:0;border-radius:inherit;background:linear-gradient(135deg,rgba(255,255,255,.08),transparent 38%);pointer-events:none}.metric:after{content:"";position:absolute;right:-34px;top:-34px;width:104px;height:104px;border-radius:999px;background:rgba(117,103,255,.13);filter:blur(.2px)}.metric .label{color:#a9b9d2;font-size:13px;font-weight:800;position:relative;z-index:1}.metric .value{font-size:34px;font-weight:950;margin-top:12px;line-height:1;position:relative;z-index:1}.metric .value:after{content:"较昨日";display:block;color:var(--muted);font-size:11px;font-weight:700;margin-top:9px}.metric.red{border-color:rgba(255,77,87,.35)}.metric.red .value{color:var(--red);text-shadow:0 0 24px rgba(255,77,87,.28)}.metric.orange .value{color:var(--orange);text-shadow:0 0 24px rgba(255,159,26,.25)}.metric.gray .value{color:#b2bfd4}.metric.blue .value{color:var(--blue);text-shadow:0 0 24px rgba(79,131,255,.28)}
+.card{background:linear-gradient(180deg,rgba(12,24,39,.92),rgba(7,14,24,.88));border:1px solid var(--line);border-radius:20px;padding:15px;box-shadow:var(--shadow);position:relative;overflow:hidden}.card:before{content:"";position:absolute;left:0;right:0;top:0;height:1px;background:linear-gradient(90deg,transparent,rgba(38,214,255,.36),transparent)}.card h2{font-size:16px;margin:0 0 12px;letter-spacing:.2px}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.section-head{display:flex;gap:12px;align-items:flex-start;justify-content:space-between;margin-bottom:12px}.section-head h2{margin:0 0 5px}.hint{color:var(--muted);font-size:12px}.filterbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.filter-input{min-width:300px}
+button{border:1px solid rgba(255,255,255,.08);border-radius:11px;background:linear-gradient(135deg,var(--purple),#495eff);color:white;padding:8px 12px;font-weight:800;cursor:pointer;transition:transform .15s ease,opacity .15s ease,box-shadow .15s ease,border-color .15s ease;box-shadow:0 10px 24px rgba(73,94,255,.18)}button:hover{transform:translateY(-1px);box-shadow:0 16px 34px rgba(73,94,255,.24);border-color:rgba(255,255,255,.18)}button.secondary{background:linear-gradient(135deg,#263243,#192234);box-shadow:none;color:#c7d5eb}button.danger{background:linear-gradient(135deg,#ff4d57,#b92331);box-shadow:0 10px 24px rgba(255,77,87,.2)}button.good{background:linear-gradient(135deg,#18c874,#0b8d55);box-shadow:0 10px 24px rgba(19,199,107,.18)}
+input{border:1px solid var(--line2);background:rgba(5,11,20,.62);color:var(--text);border-radius:12px;padding:10px 12px;min-width:220px;outline:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.015)}input:focus{border-color:rgba(38,214,255,.45);box-shadow:0 0 0 3px rgba(38,214,255,.09)}
+.table-wrap{overflow:auto;border:1px solid var(--line);border-radius:16px;background:rgba(3,8,15,.22)}table{width:100%;border-collapse:collapse;min-width:1060px}th,td{border-bottom:1px solid rgba(123,151,190,.12);padding:12px 11px;text-align:left;font-size:13px;vertical-align:middle}th{color:#8fa2bf;font-weight:850;background:rgba(8,17,29,.72);position:sticky;top:0;z-index:1}tbody tr{cursor:pointer;transition:background .15s ease,box-shadow .15s ease}tbody tr:hover{background:rgba(38,214,255,.055)}tbody tr.row-banned{opacity:.6;background:rgba(126,138,157,.06)}tbody tr.row-high{box-shadow:inset 4px 0 0 var(--red),0 0 20px rgba(255,77,87,.08)}
+.tag{display:inline-flex;align-items:center;border-radius:999px;padding:4px 9px;font-size:12px;font-weight:850;white-space:nowrap;border:1px solid transparent}.low{background:rgba(19,199,107,.13);color:#3ff091;border-color:rgba(19,199,107,.16)}.medium{background:rgba(255,159,26,.14);color:#ffb14a;border-color:rgba(255,159,26,.2)}.high{background:rgba(255,77,87,.15);color:#ff6f78;border-color:rgba(255,77,87,.22);box-shadow:0 0 22px rgba(255,77,87,.18)}
+.status-active{background:rgba(79,131,255,.14);color:#78a0ff;border-color:rgba(79,131,255,.2)}.status-banned{background:rgba(255,77,87,.14);color:#ff727a;border-color:rgba(255,77,87,.2)}.status-whitelisted{background:rgba(19,199,107,.14);color:#4cf09a;border-color:rgba(19,199,107,.2)}
+.intensity-low{background:rgba(19,199,107,.12);color:#4ce99a}.intensity-mid{background:rgba(255,159,26,.16);color:#ffb14a}.intensity-high{background:rgba(255,77,87,.14);color:#ff727a}
+.actions{display:flex;gap:7px;flex-wrap:wrap}.actions button{padding:8px 10px}.stream{display:grid;gap:9px;max-height:460px;overflow:auto;padding-right:3px}.stream-item{border:1px solid var(--line);border-radius:15px;padding:12px 13px;background:linear-gradient(90deg,rgba(79,131,255,.13),rgba(38,214,255,.035));position:relative;overflow:hidden}.stream-item:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--blue)}.stream-item.high{border-color:rgba(255,77,87,.34);box-shadow:0 0 28px rgba(255,77,87,.12);background:linear-gradient(90deg,rgba(255,77,87,.14),rgba(38,214,255,.025))}.stream-item.high:before{background:var(--red)}.stream-top{display:flex;justify-content:space-between;gap:8px;align-items:center}.stream-main{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-top:8px;color:#c8d7ee}.pulse{position:relative}.pulse:before{content:"";display:inline-block;width:7px;height:7px;border-radius:99px;background:var(--blue);margin-right:6px;box-shadow:0 0 0 0 rgba(79,131,255,.62);animation:pulse 1.6s infinite}@keyframes pulse{70%{box-shadow:0 0 0 8px rgba(79,131,255,0)}100%{box-shadow:0 0 0 0 rgba(79,131,255,0)}}
+.events{display:flex;flex-direction:column;gap:9px;max-height:460px;overflow:auto}.event{border:1px solid var(--line);border-radius:14px;padding:11px;background:rgba(5,11,20,.38)}.event-top{display:flex;justify-content:space-between;gap:8px;margin-bottom:7px}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}.muted{color:var(--muted)}.err{color:#ff8b91;margin-bottom:10px}
+.drawer-mask{position:fixed;inset:0;background:rgba(1,4,9,.68);display:none;z-index:20;backdrop-filter:blur(5px)}.drawer{position:fixed;right:0;top:0;height:100vh;width:min(560px,94vw);background:linear-gradient(180deg,#0a1422,#050a13);border-left:1px solid rgba(38,214,255,.22);box-shadow:-24px 0 70px rgba(0,0,0,.55),-1px 0 0 rgba(255,255,255,.04);transform:translateX(102%);transition:transform .22s ease;z-index:21;overflow:auto}.drawer.open{transform:translateX(0)}.drawer-mask.open{display:block}.drawer-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;padding:19px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,rgba(79,131,255,.13),transparent)}.drawer-body{padding:16px;display:grid;gap:14px}.kv{display:grid;grid-template-columns:122px 1fr;gap:8px;font-size:13px;padding:5px 0;border-bottom:1px dashed rgba(123,151,190,.13)}.mini-card{border:1px solid var(--line);border-radius:16px;padding:13px;background:rgba(8,17,29,.58)}.timeline{display:grid;gap:8px}.timeline-item{border-left:3px solid var(--cyan);padding-left:10px}.chart{width:100%;height:120px}.close{background:linear-gradient(135deg,#263243,#192234)}.nowrap{white-space:nowrap}
+@media (max-width:1180px){.shell{grid-template-columns:1fr}.side{position:relative;height:auto}.nav{grid-template-columns:repeat(3,minmax(0,1fr))}.side-foot{position:static;margin-top:16px}.grid{grid-template-columns:1fr}.wide{grid-column:auto}.overview{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:900px){.stream-top{align-items:flex-start;flex-direction:column}.filter-input{min-width:220px}}
+@media (max-width:720px){.shell{padding:10px}.side{display:none}.top{align-items:flex-start;flex-direction:column}h1{font-size:20px}.card{padding:12px}.overview{grid-template-columns:1fr}input{width:100%;min-width:0}.toolbar button{flex:1}.section-head{flex-direction:column}.filterbar{width:100%}.filterbar button{flex:1}.event-top{flex-direction:column}.kv{grid-template-columns:92px 1fr}.metric .value{font-size:28px}}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="top">
-    <div><h1>🛡️ SSH 安全事件控制台</h1><div class="sub">展示 SSH Auth Guard、上下线事件；封禁会投递固定 ban/unban 动作给对应 agent，面板不执行系统命令。</div></div>
-    <div class="toolbar"><button onclick="reloadAll()">刷新</button><button class="secondary" onclick="location.href='/admin'">返回面板</button></div>
-  </div>
-  <div id="error" class="err"></div>
-  <section class="overview" aria-label="安全概览">
-    <div class="metric red"><div class="label">🔴 高风险 IP数量</div><div id="metric-high" class="value">--</div></div>
-    <div class="metric blue"><div class="label">🟠 正在攻击 IP</div><div id="metric-active" class="value">--</div></div>
-    <div class="metric gray"><div class="label">🚫 已封禁 IP数量</div><div id="metric-banned" class="value">--</div></div>
-    <div class="metric orange"><div class="label">📊 今日攻击次数</div><div id="metric-today" class="value">--</div></div>
-  </section>
-  <div class="grid">
-    <section class="card">
-      <h2>最近攻击流</h2>
-      <div id="stream" class="stream"><div class="muted">加载中...</div></div>
+<div class="shell">
+  <aside class="side" aria-label="Security navigation">
+    <div class="brand">
+      <div class="brand-badge">🛡️</div>
+      <div><div class="brand-title">Komari</div><div class="brand-sub">安全控制台 · SOC</div></div>
+    </div>
+    <nav class="nav">
+      <div class="nav-item">▣ 节点概览</div>
+      <div class="nav-item active">◈ 安全态势</div>
+      <div class="nav-item">☷ 攻击事件</div>
+      <div class="nav-item">◇ 封禁状态</div>
+      <div class="nav-item">◎ 白名单</div>
+      <div class="nav-item">⌁ 审计日志</div>
+    </nav>
+    <div class="side-foot">SILENT SECURITY MODE<br>检测持续运行 · 通知静默 · 手动封禁可用</div>
+  </aside>
+  <main class="wrap">
+    <div class="top">
+      <div>
+        <div class="top-meta"><span class="chip">主题：深色科技风</span><span class="chip">模式：SOC Dashboard</span><span class="chip">后端：保持不变</span></div>
+        <h1>🛡️ SSH 安全事件控制台</h1>
+        <div class="sub">展示 SSH Auth Guard、上下线事件；封禁会投递固定 ban/unban 动作给对应 agent，面板不执行系统命令。</div>
+      </div>
+      <div class="toolbar"><button onclick="reloadAll()">刷新态势</button><button class="secondary" onclick="location.href='/admin'">返回面板</button></div>
+    </div>
+    <div id="error" class="err"></div>
+    <section class="overview" aria-label="安全概览">
+      <div class="metric red"><div class="label">🔴 高风险 IP数量</div><div id="metric-high" class="value">--</div></div>
+      <div class="metric blue"><div class="label">🟠 正在攻击 IP</div><div id="metric-active" class="value">--</div></div>
+      <div class="metric gray"><div class="label">🚫 已封禁 IP数量</div><div id="metric-banned" class="value">--</div></div>
+      <div class="metric orange"><div class="label">📊 今日攻击次数</div><div id="metric-today" class="value">--</div></div>
     </section>
-    <section class="card">
+    <div class="grid">
+      <section class="card">
+        <h2>实时攻击流</h2>
+      <div id="stream" class="stream"><div class="muted">加载中...</div></div>
+      </section>
+      <section class="card">
+        <h2>实时事件流</h2>
+        <div id="events" class="events"><div class="muted">加载中...</div></div>
+      </section>
+      <section class="card wide">
       <div class="section-head">
         <div>
           <h2>IP 攻击列表</h2>
@@ -605,12 +629,9 @@ input{border:1px solid var(--line);background:var(--card);color:var(--text);bord
           <tbody id="attacks"><tr><td colspan="10" class="muted">加载中...</td></tr></tbody>
         </table>
       </div>
-    </section>
-    <section class="card">
-      <h2>实时事件流</h2>
-      <div id="events" class="events"><div class="muted">加载中...</div></div>
-    </section>
-  </div>
+      </section>
+    </div>
+  </main>
 </div>
 <div id="drawerMask" class="drawer-mask" onclick="closeDrawer()"></div>
 <aside id="drawer" class="drawer" aria-label="IP 详情">

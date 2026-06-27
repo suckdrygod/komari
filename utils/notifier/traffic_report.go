@@ -153,7 +153,7 @@ func sendTrafficReport(daily, weekly, monthly bool) {
 			if strings.TrimSpace(name) == "" {
 				name = c.UUID
 			}
-			if err := messageSender.SendTextMessage(FormatCompactTrafficCard(name, compactLabel, totals), ""); err != nil {
+			if err := messageSender.SendTextMessage(FormatCompactTrafficTextCard(name, compactLabel, totals), ""); err != nil {
 				log.Printf("Failed to send compact %s traffic report for client %s: %v", label, n.Client, err)
 			}
 			continue
@@ -211,6 +211,13 @@ type TrafficTotals struct {
 // used by both scheduled reports and interactive bot commands.
 func FormatCompactTrafficCard(name, totalLabel string, totals TrafficTotals) string {
 	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n🔼 上传: %s\n🔽 下载: %s\n📊 %s: <b>%s</b>", html.EscapeString(name), humanBytes(totals.Up), humanBytes(totals.Down), html.EscapeString(totalLabel), humanBytes(totals.Up+totals.Down))
+}
+
+// FormatCompactTrafficTextCard is used by messageSender.SendTextMessage.
+// That path escapes text before sending to Telegram, so it must not contain
+// Telegram HTML tags such as <b>, otherwise the tags become visible to users.
+func FormatCompactTrafficTextCard(name, totalLabel string, totals TrafficTotals) string {
+	return fmt.Sprintf("🖥️ 机器: %s\n🔼 上传: %s\n🔽 下载: %s\n📊 %s: %s", name, humanBytes(totals.Up), humanBytes(totals.Down), totalLabel, humanBytes(totals.Up+totals.Down))
 }
 
 // GetClientTrafficTotalsInRange returns upload/download deltas from both raw

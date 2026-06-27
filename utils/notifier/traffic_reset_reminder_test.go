@@ -92,8 +92,8 @@ func TestFormatTrafficResetReminderCard(t *testing.T) {
 
 	card := FormatTrafficResetReminderCard(client, time.Date(2026, 6, 22, 0, 5, 0, 0, time.UTC))
 
-	assert.Contains(t, card, "🖥️ 机器: <b>VPS &lt;01&gt;</b>")
+	assert.Contains(t, card, "🖥️ 机器: VPS <01>")
 	assert.Contains(t, card, "🔄 今日重置: 每月 22 日")
-	assert.Contains(t, card, "📊 当前周期: <b>300 B</b>")
-	assert.Contains(t, card, "📦 剩余: <b>700 B</b> / 1000 B")
+	assert.Contains(t, card, "📊 当前周期: 300 B")
+	assert.Contains(t, card, "📦 剩余: 700 B / 1000 B")
 }

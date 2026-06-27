@@ -3,7 +3,6 @@ package notifier
 import (
 	"context"
 	"fmt"
-	"html"
 	"log"
 	"math"
 	"strings"
@@ -136,16 +135,16 @@ func FormatTrafficResetReminderCard(client models.Client, now time.Time) string 
 	}
 
 	lines := []string{
-		fmt.Sprintf("🖥️ 机器: <b>%s</b>", html.EscapeString(trafficReminderClientName(client))),
+		fmt.Sprintf("🖥️ 机器: %s", trafficReminderClientName(client)),
 		"━━━━━━━━━━━━━━",
-		fmt.Sprintf("🔄 今日重置: %s", html.EscapeString(resetText)),
-		fmt.Sprintf("🕛 时区: %s", html.EscapeString(loc.String())),
+		fmt.Sprintf("🔄 今日重置: %s", resetText),
+		fmt.Sprintf("🕛 时区: %s", loc.String()),
 	}
 	if ok {
 		lines = append(lines,
 			fmt.Sprintf("🔼 上传: %s", humanBytes(totals.Up)),
 			fmt.Sprintf("🔽 下载: %s", humanBytes(totals.Down)),
-			fmt.Sprintf("📊 当前周期: <b>%s</b>", humanBytes(totals.Up+totals.Down)),
+			fmt.Sprintf("📊 当前周期: %s", humanBytes(totals.Up+totals.Down)),
 		)
 		if client.TrafficLimit > 0 {
 			used := ComputeUsedByType(strings.ToLower(client.TrafficLimitType), totals.Up, totals.Down)
@@ -163,7 +162,7 @@ func FormatTrafficResetReminderCard(client models.Client, now time.Time) string 
 				status = "🔴 超额"
 			}
 			lines = append(lines,
-				fmt.Sprintf("📦 剩余: <b>%s</b> / %s", humanBytes(remaining), humanBytes(client.TrafficLimit)),
+				fmt.Sprintf("📦 剩余: %s / %s", humanBytes(remaining), humanBytes(client.TrafficLimit)),
 				fmt.Sprintf("🎯 状态: %s　%.1f%%", status, pct),
 			)
 		}

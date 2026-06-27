@@ -2,7 +2,6 @@ package notifier
 
 import (
 	"fmt"
-	"html"
 	"log/slog"
 	"math"
 	"strings"
@@ -98,7 +97,7 @@ func CheckTraffic() {
 				if strings.TrimSpace(name) == "" {
 					name = c.UUID
 				}
-				msg := fmt.Sprintf("🖥️ 机器: <b>%s</b>\n🔼 上传: %s\n🔽 下载: %s\n📊 已用: <b>%s</b> / %s（%d%%）", html.EscapeString(name), humanBytes(r.Network.TotalUp), humanBytes(r.Network.TotalDown), humanBytes(used), humanBytes(c.TrafficLimit), curStep)
+				msg := fmt.Sprintf("🖥️ 机器: %s\n🔼 上传: %s\n🔽 下载: %s\n📊 已用: %s / %s（%d%%）", name, humanBytes(r.Network.TotalUp), humanBytes(r.Network.TotalDown), humanBytes(used), humanBytes(c.TrafficLimit), curStep)
 				_ = messageSender.SendTextMessage(msg, "")
 				continue
 			}

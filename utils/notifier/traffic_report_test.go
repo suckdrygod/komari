@@ -311,3 +311,12 @@ func TestFormatCompactTrafficCard(t *testing.T) {
 
 	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n🔼 上传: 12.00 MB\n🔽 下载: 608.00 MB\n📊 上周: <b>620.00 MB</b>", message)
 }
+
+func TestFormatCompactTrafficTextCard(t *testing.T) {
+	message := FormatCompactTrafficTextCard("VPS <01>", "上周", TrafficTotals{
+		Up:   12 * 1024 * 1024,
+		Down: 608 * 1024 * 1024,
+	})
+
+	assert.Equal(t, "🖥️ 机器: VPS <01>\n🔼 上传: 12.00 MB\n🔽 下载: 608.00 MB\n📊 上周: 620.00 MB", message)
+}

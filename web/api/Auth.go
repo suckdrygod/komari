@@ -104,6 +104,7 @@ var publicPaths = []string{
 	"/api/me",
 	"/api/oauth",
 	"/api/oauth_callback",
+	"/api/official-traffic/cache",
 	"/api/version",
 	"/api/recent",
 	"/api/admin",    // 由 RequireRole 处理

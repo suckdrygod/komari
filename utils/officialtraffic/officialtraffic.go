@@ -35,6 +35,19 @@ type SourceConfig struct {
 	APIKey          string `json:"api_key,omitempty"`
 	DisplayName     string `json:"display_name,omitempty"`
 	CacheTTLSeconds int    `json:"cache_ttl_seconds,omitempty"`
+
+	// Collector/cache mode is used by a trusted local collector running on a
+	// machine that has already passed a provider's browser challenge. It lets
+	// the panel consume an official traffic snapshot without scraping from the
+	// panel host.
+	CollectorKey         string `json:"collector_key,omitempty"`
+	CachedUsedBytes      int64  `json:"cached_used_bytes,omitempty"`
+	CachedLimitBytes     int64  `json:"cached_limit_bytes,omitempty"`
+	CachedRemainingBytes int64  `json:"cached_remaining_bytes,omitempty"`
+	CachedResetAt        string `json:"cached_reset_at,omitempty"`
+	CachedUpdatedAt      string `json:"cached_updated_at,omitempty"`
+	NeedsVerification    bool   `json:"needs_verification,omitempty"`
+	LastError            string `json:"last_error,omitempty"`
 }
 
 type Snapshot struct {
@@ -46,6 +59,19 @@ type Snapshot struct {
 	RemainingBytes int64
 	ResetAt        time.Time
 	UpdatedAt      time.Time
+}
+
+type CollectorUpdate struct {
+	ClientUUID        string `json:"client_uuid"`
+	CollectorKey      string `json:"collector_key,omitempty"`
+	UsedBytes         int64  `json:"used_bytes,omitempty"`
+	LimitBytes        int64  `json:"limit_bytes,omitempty"`
+	RemainingBytes    int64  `json:"remaining_bytes,omitempty"`
+	ResetAt           string `json:"reset_at,omitempty"`
+	UpdatedAt         string `json:"updated_at,omitempty"`
+	SourceName        string `json:"source_name,omitempty"`
+	NeedsVerification bool   `json:"needs_verification,omitempty"`
+	Error             string `json:"error,omitempty"`
 }
 
 type cachedSnapshot struct {
@@ -128,12 +154,16 @@ func IsConfiguredForUUID(uuid string) bool {
 
 func LastFailureReason(uuid string) (string, bool) {
 	mu.Lock()
-	defer mu.Unlock()
 	item, ok := cache[uuid]
-	if !ok || item.ok || strings.TrimSpace(item.failureReason) == "" {
+	mu.Unlock()
+	if ok && !item.ok && strings.TrimSpace(item.failureReason) != "" {
+		return item.failureReason, true
+	}
+	cfg, cfgOK := sourceConfigForUUID(uuid)
+	if !cfgOK || strings.TrimSpace(cfg.LastError) == "" {
 		return "", false
 	}
-	return item.failureReason, true
+	return cfg.LastError, true
 }
 
 func ApplyReportOverride(uuid string, report *v1.Report) bool {
@@ -175,9 +205,163 @@ func fetchSnapshot(ctx context.Context, uuid string, cfg SourceConfig) (Snapshot
 	switch normalizeProvider(cfg.Provider) {
 	case "bandwagon", "bandwagonhost", "kiwivm", "64clouds":
 		return fetchBandwagonSnapshot(ctx, uuid, cfg)
+	case "collector-cache", "cache", "dmit-cache", "greencloud-cache", "manual-cache":
+		return fetchCollectorCacheSnapshot(uuid, cfg)
 	default:
 		return Snapshot{}, fmt.Errorf("unsupported provider %q", safeProvider(cfg.Provider))
 	}
+}
+
+func UpdateCollectorSnapshot(update CollectorUpdate, bearerToken string) (Snapshot, bool, error) {
+	uuid := strings.TrimSpace(update.ClientUUID)
+	if uuid == "" {
+		return Snapshot{}, false, errors.New("missing client_uuid")
+	}
+	sources, err := config.GetAs[map[string]SourceConfig](ConfigKey)
+	if err != nil || len(sources) == 0 {
+		return Snapshot{}, false, errors.New("official traffic source is not configured")
+	}
+	cfg, key, ok := findSourceConfig(sources, uuid)
+	if !ok || !cfg.Enabled {
+		return Snapshot{}, false, errors.New("official traffic source is not enabled")
+	}
+	if !isCollectorCacheProvider(cfg.Provider) {
+		return Snapshot{}, false, fmt.Errorf("provider %q does not accept collector cache updates", safeProvider(cfg.Provider))
+	}
+	expectedKey := strings.TrimSpace(cfg.CollectorKey)
+	providedKey := strings.TrimSpace(update.CollectorKey)
+	if providedKey == "" {
+		providedKey = strings.TrimSpace(bearerToken)
+	}
+	if expectedKey == "" || providedKey == "" || providedKey != expectedKey {
+		return Snapshot{}, false, errors.New("invalid collector key")
+	}
+
+	now := time.Now().UTC()
+	cfg.LastError = sanitizeCollectorMessage(update.Error)
+	cfg.NeedsVerification = update.NeedsVerification
+	if strings.TrimSpace(update.SourceName) != "" {
+		cfg.DisplayName = strings.TrimSpace(update.SourceName)
+	}
+	if update.NeedsVerification {
+		if cfg.LastError == "" {
+			cfg.LastError = "collector needs manual verification"
+		}
+		cfg.CachedUpdatedAt = now.Format(time.RFC3339)
+		sources[key] = cfg
+		if err := config.Set(ConfigKey, sources); err != nil {
+			return Snapshot{}, false, err
+		}
+		invalidateCache(uuid)
+		snapshot, hasSnapshot := snapshotFromCollectorConfig(uuid, cfg)
+		return snapshot, hasSnapshot, nil
+	}
+
+	if update.UsedBytes < 0 || update.LimitBytes < 0 || update.RemainingBytes < 0 {
+		return Snapshot{}, false, errors.New("traffic values must be non-negative")
+	}
+	if update.UsedBytes == 0 && update.LimitBytes == 0 {
+		return Snapshot{}, false, errors.New("missing official traffic values")
+	}
+	cfg.CachedUsedBytes = update.UsedBytes
+	cfg.CachedLimitBytes = update.LimitBytes
+	if update.RemainingBytes > 0 {
+		cfg.CachedRemainingBytes = update.RemainingBytes
+	} else if update.LimitBytes > 0 {
+		cfg.CachedRemainingBytes = maxInt64(update.LimitBytes-update.UsedBytes, 0)
+	} else {
+		cfg.CachedRemainingBytes = 0
+	}
+	cfg.CachedResetAt = normalizeTimeString(update.ResetAt)
+	if normalized := normalizeTimeString(update.UpdatedAt); normalized != "" {
+		cfg.CachedUpdatedAt = normalized
+	} else {
+		cfg.CachedUpdatedAt = now.Format(time.RFC3339)
+	}
+	cfg.NeedsVerification = false
+	cfg.LastError = ""
+
+	sources[key] = cfg
+	if err := config.Set(ConfigKey, sources); err != nil {
+		return Snapshot{}, false, err
+	}
+	invalidateCache(uuid)
+	snapshot, ok := snapshotFromCollectorConfig(uuid, cfg)
+	if !ok {
+		return Snapshot{}, false, errors.New("saved collector snapshot is invalid")
+	}
+	return snapshot, true, nil
+}
+
+func fetchCollectorCacheSnapshot(uuid string, cfg SourceConfig) (Snapshot, error) {
+	snapshot, ok := snapshotFromCollectorConfig(uuid, cfg)
+	if ok {
+		return snapshot, nil
+	}
+	if cfg.NeedsVerification {
+		reason := strings.TrimSpace(cfg.LastError)
+		if reason == "" {
+			reason = "collector needs manual verification"
+		}
+		return Snapshot{}, errors.New(reason)
+	}
+	return Snapshot{}, errors.New("collector cache is empty")
+}
+
+func snapshotFromCollectorConfig(uuid string, cfg SourceConfig) (Snapshot, bool) {
+	if cfg.CachedUsedBytes <= 0 && cfg.CachedLimitBytes <= 0 {
+		return Snapshot{}, false
+	}
+	remaining := cfg.CachedRemainingBytes
+	if remaining <= 0 && cfg.CachedLimitBytes > 0 {
+		remaining = maxInt64(cfg.CachedLimitBytes-cfg.CachedUsedBytes, 0)
+	}
+	sourceName := strings.TrimSpace(cfg.DisplayName)
+	if sourceName == "" {
+		sourceName = "官方缓存"
+	}
+	resetAt := parseTimeString(cfg.CachedResetAt)
+	updatedAt := parseTimeString(cfg.CachedUpdatedAt)
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
+	return Snapshot{
+		ClientUUID:     uuid,
+		Provider:       normalizeProvider(cfg.Provider),
+		SourceName:     sourceName,
+		UsedBytes:      cfg.CachedUsedBytes,
+		LimitBytes:     cfg.CachedLimitBytes,
+		RemainingBytes: remaining,
+		ResetAt:        resetAt,
+		UpdatedAt:      updatedAt,
+	}, true
+}
+
+func findSourceConfig(sources map[string]SourceConfig, uuid string) (SourceConfig, string, bool) {
+	if value, exists := sources[uuid]; exists {
+		return value, uuid, true
+	}
+	for key, value := range sources {
+		if strings.EqualFold(strings.TrimSpace(key), strings.TrimSpace(uuid)) {
+			return value, key, true
+		}
+	}
+	return SourceConfig{}, "", false
+}
+
+func isCollectorCacheProvider(provider string) bool {
+	switch normalizeProvider(provider) {
+	case "collector-cache", "cache", "dmit-cache", "greencloud-cache", "manual-cache":
+		return true
+	default:
+		return false
+	}
+}
+
+func invalidateCache(uuid string) {
+	mu.Lock()
+	defer mu.Unlock()
+	delete(cache, uuid)
 }
 
 func fetchBandwagonSnapshot(ctx context.Context, uuid string, cfg SourceConfig) (Snapshot, error) {
@@ -352,7 +536,7 @@ func sanitizeError(err error) string {
 }
 
 func redactSensitive(s string) string {
-	for _, key := range []string{"api_key", "token", "password"} {
+	for _, key := range []string{"api_key", "token", "password", "collector_key"} {
 		s = redactQueryParam(s, key)
 	}
 	return s
@@ -373,4 +557,40 @@ func redactQueryParam(s, key string) string {
 		s = s[:valueStart] + "***" + s[valueEnd:]
 	}
 	return s
+}
+
+func normalizeTimeString(value string) string {
+	t := parseTimeString(value)
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
+}
+
+func parseTimeString(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t
+	}
+	if unix, err := strconv.ParseInt(value, 10, 64); err == nil && unix > 0 {
+		return time.Unix(unix, 0)
+	}
+	return time.Time{}
+}
+
+func sanitizeCollectorMessage(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = redactSensitive(value)
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	if len(value) > 240 {
+		value = value[:240]
+	}
+	return value
 }

@@ -50,6 +50,7 @@ type Snapshot struct {
 
 type cachedSnapshot struct {
 	snapshot  Snapshot
+	ok        bool
 	expiresAt time.Time
 }
 
@@ -90,6 +91,10 @@ func GetSnapshotForUUID(uuid string) (*Snapshot, bool) {
 	now := time.Now()
 	mu.Lock()
 	if item, exists := cache[uuid]; exists && now.Before(item.expiresAt) {
+		if !item.ok {
+			mu.Unlock()
+			return nil, false
+		}
 		snapshot := item.snapshot
 		mu.Unlock()
 		return &snapshot, true
@@ -102,11 +107,14 @@ func GetSnapshotForUUID(uuid string) (*Snapshot, bool) {
 	snapshot, err := fetchSnapshot(ctx, uuid, cfg)
 	if err != nil {
 		slog.Warn("official traffic source fetch failed", "client", uuid, "provider", safeProvider(cfg.Provider), "error", err)
+		mu.Lock()
+		cache[uuid] = cachedSnapshot{expiresAt: now.Add(ttl)}
+		mu.Unlock()
 		return nil, false
 	}
 
 	mu.Lock()
-	cache[uuid] = cachedSnapshot{snapshot: snapshot, expiresAt: now.Add(ttl)}
+	cache[uuid] = cachedSnapshot{snapshot: snapshot, ok: true, expiresAt: now.Add(ttl)}
 	mu.Unlock()
 	return &snapshot, true
 }

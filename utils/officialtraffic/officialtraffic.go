@@ -49,9 +49,10 @@ type Snapshot struct {
 }
 
 type cachedSnapshot struct {
-	snapshot  Snapshot
-	ok        bool
-	expiresAt time.Time
+	snapshot      Snapshot
+	ok            bool
+	expiresAt     time.Time
+	failureReason string
 }
 
 var (
@@ -106,9 +107,10 @@ func GetSnapshotForUUID(uuid string) (*Snapshot, bool) {
 
 	snapshot, err := fetchSnapshot(ctx, uuid, cfg)
 	if err != nil {
-		slog.Warn("official traffic source fetch failed", "client", uuid, "provider", safeProvider(cfg.Provider), "error", err)
+		reason := sanitizeError(err)
+		slog.Warn("official traffic source fetch failed", "client", uuid, "provider", safeProvider(cfg.Provider), "error", reason)
 		mu.Lock()
-		cache[uuid] = cachedSnapshot{expiresAt: now.Add(ttl)}
+		cache[uuid] = cachedSnapshot{expiresAt: now.Add(ttl), failureReason: reason}
 		mu.Unlock()
 		return nil, false
 	}
@@ -117,6 +119,21 @@ func GetSnapshotForUUID(uuid string) (*Snapshot, bool) {
 	cache[uuid] = cachedSnapshot{snapshot: snapshot, ok: true, expiresAt: now.Add(ttl)}
 	mu.Unlock()
 	return &snapshot, true
+}
+
+func IsConfiguredForUUID(uuid string) bool {
+	cfg, ok := sourceConfigForUUID(uuid)
+	return ok && cfg.Enabled
+}
+
+func LastFailureReason(uuid string) (string, bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	item, ok := cache[uuid]
+	if !ok || item.ok || strings.TrimSpace(item.failureReason) == "" {
+		return "", false
+	}
+	return item.failureReason, true
 }
 
 func ApplyReportOverride(uuid string, report *v1.Report) bool {
@@ -325,4 +342,35 @@ func maxInt64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+func sanitizeError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return redactSensitive(err.Error())
+}
+
+func redactSensitive(s string) string {
+	for _, key := range []string{"api_key", "token", "password"} {
+		s = redactQueryParam(s, key)
+	}
+	return s
+}
+
+func redactQueryParam(s, key string) string {
+	for _, sep := range []string{"?", "&"} {
+		needle := sep + key + "="
+		start := strings.Index(strings.ToLower(s), strings.ToLower(needle))
+		if start < 0 {
+			continue
+		}
+		valueStart := start + len(needle)
+		valueEnd := len(s)
+		if next := strings.IndexByte(s[valueStart:], '&'); next >= 0 {
+			valueEnd = valueStart + next
+		}
+		s = s[:valueStart] + "***" + s[valueEnd:]
+	}
+	return s
 }

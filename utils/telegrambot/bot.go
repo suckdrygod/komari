@@ -813,7 +813,7 @@ func (b *bot) sendCycle(ctx context.Context, selector string) {
 			continue
 		}
 		if totals, ok := notifier.GetClientVnstatCycleTotals(client, now); ok {
-			_ = b.sendEphemeral(ctx, formatTrafficCard(client, totals, "周期"), nil)
+			_ = b.sendEphemeral(ctx, formatTrafficCardWithNote(client, totals, "周期", officialTrafficFallbackNote(client)), nil)
 			continue
 		}
 		b.sendCumulative(ctx, client.UUID, "周期")
@@ -985,14 +985,14 @@ func (b *bot) sendRemaining(ctx context.Context, selector string) {
 		}
 		used := notifier.ComputeUsedByType(strings.ToLower(client.TrafficLimitType), totals.Up, totals.Down)
 		if client.TrafficLimit <= 0 {
-			_ = b.sendEphemeral(ctx, formatRemainingCard(client, used, 0, 0, true), nil)
+			_ = b.sendEphemeral(ctx, withOfficialTrafficFallbackNote(formatRemainingCard(client, used, 0, 0, true), client), nil)
 			continue
 		}
 		remaining := client.TrafficLimit - used
 		if remaining < 0 {
 			remaining = 0
 		}
-		_ = b.sendEphemeral(ctx, formatRemainingCard(client, used, remaining, client.TrafficLimit, false), nil)
+		_ = b.sendEphemeral(ctx, withOfficialTrafficFallbackNote(formatRemainingCard(client, used, remaining, client.TrafficLimit, false), client), nil)
 	}
 }
 
@@ -1107,6 +1107,33 @@ func isOnline(uuid string) bool {
 func formatTrafficCard(client models.Client, totals notifier.TrafficTotals, totalLabel string) string {
 	totals = capTodayTrafficTotals(client, totals, totalLabel)
 	return notifier.FormatCompactTrafficCard(displayName(client), totalLabel, totals)
+}
+
+func formatTrafficCardWithNote(client models.Client, totals notifier.TrafficTotals, totalLabel, note string) string {
+	card := formatTrafficCard(client, totals, totalLabel)
+	if strings.TrimSpace(note) == "" {
+		return card
+	}
+	return card + "\n" + note
+}
+
+func withOfficialTrafficFallbackNote(card string, client models.Client) string {
+	note := officialTrafficFallbackNote(client)
+	if strings.TrimSpace(note) == "" {
+		return card
+	}
+	return card + "\n" + note
+}
+
+func officialTrafficFallbackNote(client models.Client) string {
+	if !officialtraffic.IsConfiguredForUUID(client.UUID) {
+		return ""
+	}
+	reason := "官方 API 暂不可用"
+	if cachedReason, ok := officialtraffic.LastFailureReason(client.UUID); ok && strings.TrimSpace(cachedReason) != "" {
+		reason = cachedReason
+	}
+	return "📡 官方源: 暂不可用，已回退探针数据\n⚠️ 原因: " + html.EscapeString(reason)
 }
 
 func capTodayTrafficTotals(client models.Client, totals notifier.TrafficTotals, totalLabel string) notifier.TrafficTotals {

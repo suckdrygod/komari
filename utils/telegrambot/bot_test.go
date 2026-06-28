@@ -209,6 +209,7 @@ func TestCompactTrafficCards(t *testing.T) {
 	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n━━━━━━━━━━━━━━\n📈 已用: 600.00 MB / 1000.00 MB\n📦 剩余: <b>400.00 MB</b>\n🎯 状态: 🟢 安全　60.0%\n▰▰▰▰▰▰▱▱▱▱", formatRemainingCard(client, 600*1024*1024, 400*1024*1024, 1000*1024*1024, false))
 	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n━━━━━━━━━━━━━━\n📈 已用: 600.00 MB\n📦 剩余: <b>∞ 无限</b>\n📊 总量: ∞ 无限\n🎯 状态: ⚪ 未设置流量上限", formatRemainingCard(client, 600*1024*1024, 0, 0, true))
 	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n━━━━━━━━━━━━━━\n🔄 重置: 每月 1 日", formatResetCard(client, "每月 1 日"))
+	assert.Equal(t, "🖥️ 机器: <b>VPS &lt;01&gt;</b>\n🔼 上传: 12.00 MB\n🔽 下载: 608.00 MB\n📊 周期: <b>620.00 MB</b>\n📡 官方源: 暂不可用，已回退探针数据", formatTrafficCardWithNote(client, totals, "周期", "📡 官方源: 暂不可用，已回退探针数据"))
 	assert.Equal(t, "▰▰▰▰▰▰▱▱▱▱", progressBar(60))
 	icon, text := trafficUsageStatus(92)
 	assert.Equal(t, "🔴", icon)

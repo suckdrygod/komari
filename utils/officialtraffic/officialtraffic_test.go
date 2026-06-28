@@ -1,6 +1,7 @@
 package officialtraffic
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -55,5 +56,19 @@ func TestParseBandwagonSnapshotProviderError(t *testing.T) {
 	_, err := parseBandwagonSnapshot("node-1", SourceConfig{Provider: "bandwagon"}, []byte(`{"error":"invalid api key"}`))
 	if err == nil {
 		t.Fatal("expected provider error")
+	}
+}
+
+func TestRedactSensitiveError(t *testing.T) {
+	raw := `Get "https://api.64clouds.com/v1/getServiceInfo?api_key=private_secret&veid=123": context deadline exceeded`
+	got := redactSensitive(raw)
+	if got == raw {
+		t.Fatal("expected redacted error")
+	}
+	if strings.Contains(got, "private_secret") {
+		t.Fatalf("unexpected secret in output: %s", got)
+	}
+	if got != `Get "https://api.64clouds.com/v1/getServiceInfo?api_key=***&veid=123": context deadline exceeded` {
+		t.Fatalf("unexpected redacted error: %s", got)
 	}
 }

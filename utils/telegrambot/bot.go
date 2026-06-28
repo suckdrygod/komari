@@ -26,6 +26,7 @@ import (
 	"github.com/komari-monitor/komari/utils/messageSender"
 	telegramprovider "github.com/komari-monitor/komari/utils/messageSender/telegram"
 	"github.com/komari-monitor/komari/utils/notifier"
+	"github.com/komari-monitor/komari/utils/officialtraffic"
 	agent_runtime "github.com/komari-monitor/komari/web/agent"
 )
 
@@ -807,6 +808,10 @@ func (b *bot) sendCycle(ctx context.Context, selector string) {
 	}
 	now := time.Now().In(b.location)
 	for _, client := range list {
+		if snapshot, ok := officialtraffic.GetSnapshot(client); ok {
+			_ = b.sendEphemeral(ctx, formatOfficialTrafficCard(client, snapshot, "官方周期", b.location), nil)
+			continue
+		}
 		if totals, ok := notifier.GetClientVnstatCycleTotals(client, now); ok {
 			_ = b.sendEphemeral(ctx, formatTrafficCard(client, totals, "周期"), nil)
 			continue
@@ -965,6 +970,10 @@ func (b *bot) sendRemaining(ctx context.Context, selector string) {
 	}
 	reports := agent_runtime.GetLatestReport()
 	for _, client := range list {
+		if snapshot, ok := officialtraffic.GetSnapshot(client); ok {
+			_ = b.sendEphemeral(ctx, formatOfficialTrafficCard(client, snapshot, "官方剩余", b.location), nil)
+			continue
+		}
 		totals := notifier.TrafficTotals{}
 		if vnstatTotals, ok := notifier.GetClientVnstatCycleTotals(client, time.Now().In(b.location)); ok {
 			totals = vnstatTotals
@@ -1126,6 +1135,52 @@ func formatTrafficErrorCard(client models.Client) string {
 
 func formatAllTrafficCard(count int, up, down int64) string {
 	return fmt.Sprintf("🖥️ 机器: <b>全部机器（%d 台）</b>\n━━━━━━━━━━━━━━\n🔼 上传: %s\n🔽 下载: %s\n📊 总计: <b>%s</b>", count, humanBytes(up), humanBytes(down), humanBytes(up+down))
+}
+
+func formatOfficialTrafficCard(client models.Client, snapshot *officialtraffic.Snapshot, totalLabel string, loc *time.Location) string {
+	if snapshot == nil {
+		return formatTrafficErrorCard(client)
+	}
+	if loc == nil {
+		loc = time.Local
+	}
+	used := snapshot.UsedBytes
+	limit := snapshot.LimitBytes
+	remaining := snapshot.RemainingBytes
+	percent := 0.0
+	if limit > 0 {
+		percent = float64(used) / float64(limit) * 100
+	}
+	statusIcon, statusText := trafficUsageStatus(percent)
+	resetLine := ""
+	if !snapshot.ResetAt.IsZero() {
+		resetLine = "\n🔄 重置: " + html.EscapeString(snapshot.ResetAt.In(loc).Format("2006-01-02 15:04"))
+	}
+	sourceName := strings.TrimSpace(snapshot.SourceName)
+	if sourceName == "" {
+		sourceName = "官方 API"
+	}
+	limitText := "∞ 无限"
+	if limit > 0 {
+		limitText = humanBytes(limit)
+	}
+	remainingText := "∞ 无限"
+	if limit > 0 {
+		remainingText = humanBytes(remaining)
+	}
+	return fmt.Sprintf("🖥️ 机器: <b>%s</b>\n━━━━━━━━━━━━━━\n📡 来源: %s\n📊 %s: <b>%s</b> / %s\n📦 剩余: <b>%s</b>%s\n🎯 状态: %s %s　%.1f%%\n%s",
+		html.EscapeString(displayName(client)),
+		html.EscapeString(sourceName),
+		html.EscapeString(totalLabel),
+		humanBytes(used),
+		limitText,
+		remainingText,
+		resetLine,
+		statusIcon,
+		statusText,
+		percent,
+		progressBar(percent),
+	)
 }
 
 func formatRemainingCard(client models.Client, used, remaining, limit int64, unlimited bool) string {

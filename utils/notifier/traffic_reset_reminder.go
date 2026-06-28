@@ -13,6 +13,7 @@ import (
 	"github.com/komari-monitor/komari/pkg/config"
 	"github.com/komari-monitor/komari/pkg/corn"
 	"github.com/komari-monitor/komari/utils/messageSender"
+	"github.com/komari-monitor/komari/utils/officialtraffic"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -139,6 +140,24 @@ func FormatTrafficResetReminderCard(client models.Client, now time.Time) string 
 		"━━━━━━━━━━━━━━",
 		fmt.Sprintf("🔄 今日重置: %s", resetText),
 		fmt.Sprintf("🕛 时区: %s", loc.String()),
+	}
+	if snapshot, snapshotOK := officialtraffic.GetSnapshot(client); snapshotOK {
+		lines = append(lines,
+			fmt.Sprintf("📡 来源: %s", snapshot.SourceName),
+			fmt.Sprintf("📊 当前周期: %s", humanBytes(snapshot.UsedBytes)),
+		)
+		if snapshot.LimitBytes > 0 {
+			pct := math.Min(float64(snapshot.UsedBytes)/float64(snapshot.LimitBytes)*100, 999)
+			status := "🟢 新周期"
+			if snapshot.UsedBytes > snapshot.LimitBytes {
+				status = "🔴 超额"
+			}
+			lines = append(lines,
+				fmt.Sprintf("📦 剩余: %s / %s", humanBytes(snapshot.RemainingBytes), humanBytes(snapshot.LimitBytes)),
+				fmt.Sprintf("🎯 状态: %s　%.1f%%", status, pct),
+			)
+		}
+		return strings.Join(lines, "\n")
 	}
 	if ok {
 		lines = append(lines,

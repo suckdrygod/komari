@@ -17,6 +17,7 @@ import (
 	"github.com/komari-monitor/komari/pkg/rpc"
 	"github.com/komari-monitor/komari/protocol/v1"
 	"github.com/komari-monitor/komari/utils"
+	"github.com/komari-monitor/komari/utils/officialtraffic"
 	agent_runtime "github.com/komari-monitor/komari/web/agent"
 	report_cache "github.com/komari-monitor/komari/web/report"
 
@@ -355,6 +356,12 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 			return
 		}
 		stats := getPingStatsForNode(uuid, pingTasks)
+		totalUp := rep.Network.TotalUp
+		totalDown := rep.Network.TotalDown
+		if snapshot, ok := officialtraffic.GetSnapshotForUUID(uuid); ok {
+			totalUp = 0
+			totalDown = snapshot.UsedBytes
+		}
 		rl := recordLike{
 			Client:         uuid,
 			Time:           models.FromTime(rep.UpdatedAt),
@@ -372,8 +379,8 @@ func getNodesLatestStatus(ctx context.Context, req *rpc.JsonRpcRequest) (any, *r
 			DiskTotal:      rep.Disk.Total,
 			NetIn:          rep.Network.Down,
 			NetOut:         rep.Network.Up,
-			NetTotalUp:     rep.Network.TotalUp,
-			NetTotalDown:   rep.Network.TotalDown,
+			NetTotalUp:     totalUp,
+			NetTotalDown:   totalDown,
 			Process:        rep.Process,
 			Connections:    rep.Connections.TCP + rep.Connections.UDP,
 			ConnectionsUdp: rep.Connections.UDP,

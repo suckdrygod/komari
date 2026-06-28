@@ -9,6 +9,7 @@ import (
 	"github.com/komari-monitor/komari/database/dbcore"
 	"github.com/komari-monitor/komari/database/models"
 	"github.com/komari-monitor/komari/protocol/v1"
+	"github.com/komari-monitor/komari/utils/officialtraffic"
 	agent_runtime "github.com/komari-monitor/komari/web/agent"
 )
 
@@ -96,11 +97,13 @@ func GetClients(c *gin.Context) {
 				continue
 			}
 
-			report.UUID = "" // 不暴露 uuid
-			if report.CPU.Usage == 0 {
-				report.CPU.Usage = 0.01
+			out := *report
+			officialtraffic.ApplyReportOverride(key, &out)
+			out.UUID = "" // 不暴露 uuid
+			if out.CPU.Usage == 0 {
+				out.CPU.Usage = 0.01
 			}
-			resp.Data[key] = *report
+			resp.Data[key] = out
 		}
 
 		err = conn.WriteJSON(gin.H{"status": "success", "data": resp})

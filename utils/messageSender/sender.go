@@ -12,6 +12,7 @@ import (
 	"github.com/komari-monitor/komari/database"
 	"github.com/komari-monitor/komari/database/auditlog"
 	"github.com/komari-monitor/komari/database/models"
+	messageevent "github.com/komari-monitor/komari/database/models/messageEvent"
 	"github.com/komari-monitor/komari/pkg/config"
 	"github.com/komari-monitor/komari/utils/messageSender/factory"
 )
@@ -302,7 +303,7 @@ func sendEventToProvider(provider factory.IMessageSender, event models.EventMess
 		}
 		return err
 	}
-	return sendTextMessageToProvider(provider, formatEventMessage(messageTemplate, event), event.Event)
+	return sendTextMessageToProvider(provider, formatEventMessage(messageTemplate, event), eventDisplayTitle(event))
 }
 
 func isSuccessfulSendError(err error) bool {
@@ -358,6 +359,60 @@ func isolatedEventTemplate(event models.EventMessage) (string, bool) {
 			"📝 详细说明：" + event.Message,
 			"🕒 时间：" + timeText,
 		}, "\n"), true
+	case messageevent.Expire:
+		return strings.Join([]string{
+			"⏳ 到期提醒",
+			"━━━━━━━━━━━━━━",
+			"📌 事件类型：Expire",
+			"📝 即将到期：",
+			strings.TrimSpace(event.Message),
+			"🕒 时间：" + timeText,
+		}, "\n"), true
+	case messageevent.Renew:
+		return strings.Join([]string{
+			"🔄 自动续费通知",
+			"━━━━━━━━━━━━━━",
+			"🖥️ 节点名称：" + clientText,
+			"📌 事件类型：Renew",
+			"📝 详细说明：",
+			strings.TrimSpace(event.Message),
+			"🕒 时间：" + timeText,
+		}, "\n"), true
+	case messageevent.Login:
+		return strings.Join([]string{
+			"🔑 面板登录提醒",
+			"━━━━━━━━━━━━━━",
+			"📌 事件类型：Login",
+			"📝 详细说明：" + event.Message,
+			"🕒 时间：" + timeText,
+		}, "\n"), true
+	case messageevent.Alert:
+		return strings.Join([]string{
+			"⚠️ 负载告警",
+			"━━━━━━━━━━━━━━",
+			"🖥️ 节点名称：" + clientText,
+			"📌 事件类型：Alert",
+			"📝 详细说明：" + event.Message,
+			"🕒 时间：" + timeText,
+		}, "\n"), true
+	case messageevent.Traffic:
+		return strings.Join([]string{
+			"⚠️ 流量阈值提醒",
+			"━━━━━━━━━━━━━━",
+			"🖥️ 节点名称：" + clientText,
+			"📌 事件类型：Traffic",
+			"📝 详细说明：" + event.Message,
+			"🕒 时间：" + timeText,
+		}, "\n"), true
+	case messageevent.DReport, messageevent.WReport, messageevent.MReport:
+		return strings.Join([]string{
+			event.Emoji + " " + trafficReportTitle(event.Event),
+			"━━━━━━━━━━━━━━",
+			"📌 事件类型：" + event.Event,
+			"📝 详细说明：",
+			strings.TrimSpace(event.Message),
+			"🕒 时间：" + timeText,
+		}, "\n"), true
 	case "Test":
 		return strings.Join([]string{
 			"🧪 Test",
@@ -368,6 +423,38 @@ func isolatedEventTemplate(event models.EventMessage) (string, bool) {
 		}, "\n"), true
 	default:
 		return "", false
+	}
+}
+
+func eventDisplayTitle(event models.EventMessage) string {
+	switch event.Event {
+	case messageevent.Expire:
+		return "到期提醒"
+	case messageevent.Renew:
+		return "自动续费通知"
+	case messageevent.Login:
+		return "面板登录提醒"
+	case messageevent.Alert:
+		return "负载告警"
+	case messageevent.Traffic:
+		return "流量阈值提醒"
+	case messageevent.DReport, messageevent.WReport, messageevent.MReport:
+		return trafficReportTitle(event.Event)
+	default:
+		return event.Event
+	}
+}
+
+func trafficReportTitle(event string) string {
+	switch event {
+	case messageevent.DReport:
+		return "每日流量报告"
+	case messageevent.WReport:
+		return "每周流量报告"
+	case messageevent.MReport:
+		return "每月流量报告"
+	default:
+		return "流量报告"
 	}
 }
 

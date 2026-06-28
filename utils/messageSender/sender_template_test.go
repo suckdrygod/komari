@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/komari-monitor/komari/database/models"
+	messageevent "github.com/komari-monitor/komari/database/models/messageEvent"
 	"github.com/komari-monitor/komari/utils/messageSender/factory"
 )
 
@@ -42,6 +43,40 @@ func TestIsolatedEventTemplatesDoNotUseSSHSuccessText(t *testing.T) {
 			Time:    time.Date(2026, 6, 24, 8, 3, 0, 0, time.UTC),
 			Message: "This is a test message from Komari.",
 		},
+		{
+			Event:   messageevent.Expire,
+			Time:    time.Date(2026, 6, 24, 8, 4, 0, 0, time.UTC),
+			Message: "• WEPC美国家宽直播 (7d)",
+		},
+		{
+			Event:   messageevent.Renew,
+			Clients: []models.Client{{Name: "node-renew"}},
+			Time:    time.Date(2026, 6, 24, 8, 5, 0, 0, time.UTC),
+			Message: "• node-renew until 2026-07-24",
+		},
+		{
+			Event:   messageevent.Login,
+			Time:    time.Date(2026, 6, 24, 8, 6, 0, 0, time.UTC),
+			Message: "password: 203.0.113.10 (US)\nSafari",
+		},
+		{
+			Event:   messageevent.Alert,
+			Clients: []models.Client{{Name: "node-load"}},
+			Time:    time.Date(2026, 6, 24, 8, 7, 0, 0, time.UTC),
+			Message: "CPU high",
+		},
+		{
+			Event:   messageevent.Traffic,
+			Clients: []models.Client{{Name: "node-traffic"}},
+			Time:    time.Date(2026, 6, 24, 8, 8, 0, 0, time.UTC),
+			Message: "used 80%",
+		},
+		{
+			Event:   messageevent.DReport,
+			Time:    time.Date(2026, 6, 24, 8, 9, 0, 0, time.UTC),
+			Emoji:   "📊",
+			Message: "node-a：1 GB",
+		},
 	}
 
 	for _, event := range events {
@@ -65,14 +100,33 @@ func TestSSHSuccessEventUsesSSHSuccessTemplate(t *testing.T) {
 	assertContains(t, got, "节点名称：node-a")
 }
 
-func TestNonIsolatedEventsStillUseGlobalTemplate(t *testing.T) {
+func TestCustomNonIsolatedEventsStillUseGlobalTemplate(t *testing.T) {
 	got := formatEventMessage("global {{event}} {{client}} {{message}}", models.EventMessage{
-		Event:   "Traffic",
+		Event:   "CustomEvent",
 		Clients: []models.Client{{Name: "node-a"}},
 		Message: "used 80%",
 	})
 
-	assertContains(t, got, "global Traffic node-a used 80%")
+	assertContains(t, got, "global CustomEvent node-a used 80%")
+}
+
+func TestEventDisplayTitleUsesChineseForBuiltInEvents(t *testing.T) {
+	cases := map[string]string{
+		messageevent.Expire:  "到期提醒",
+		messageevent.Renew:   "自动续费通知",
+		messageevent.Login:   "面板登录提醒",
+		messageevent.Alert:   "负载告警",
+		messageevent.Traffic: "流量阈值提醒",
+		messageevent.DReport: "每日流量报告",
+		messageevent.WReport: "每周流量报告",
+		messageevent.MReport: "每月流量报告",
+		"CustomEvent":        "CustomEvent",
+	}
+	for event, want := range cases {
+		if got := eventDisplayTitle(models.EventMessage{Event: event}); got != want {
+			t.Fatalf("eventDisplayTitle(%q) = %q, want %q", event, got, want)
+		}
+	}
 }
 
 func TestProviderNamesFromValueDedupAndFilter(t *testing.T) {

@@ -1,6 +1,7 @@
 package report
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"sort"
@@ -9,12 +10,11 @@ import (
 	"time"
 
 	"github.com/komari-monitor/komari/database/clients"
-	"github.com/komari-monitor/komari/database/dbcore"
+	"github.com/komari-monitor/komari/database/metricstore"
 	"github.com/komari-monitor/komari/database/models"
 	"github.com/komari-monitor/komari/protocol/v1"
 	"github.com/komari-monitor/komari/utils"
 	"github.com/patrickmn/go-cache"
-	"gorm.io/gorm"
 )
 
 var Records = cache.New(1*time.Minute, 1*time.Minute)
@@ -36,11 +36,15 @@ func AppendClientReport(uuid string, report v1.Report) (v1.Report, error) {
 	return report, nil
 }
 
+// SaveClientReportToDB 把缓存中的报告聚合后写入 metric store。
+//
+// 历史监控数据已完全迁移到 metric store（默认 SQLite ./data/metrics.db，或配置的
+// MySQL/PostgreSQL），运行期的读写全部走 metric store，不再写旧 records 表。
 func SaveClientReportToDB() error {
-	return saveClientReportToDB(dbcore.GetDBInstance(), time.Now())
+	return saveClientReportToDB(time.Now())
 }
 
-func saveClientReportToDB(db *gorm.DB, now time.Time) error {
+func saveClientReportToDB(now time.Time) error {
 	saveClientReportMu.Lock()
 	defer saveClientReportMu.Unlock()
 
@@ -50,6 +54,8 @@ func saveClientReportToDB(db *gorm.DB, now time.Time) error {
 	trafficByRecord := make(map[string]cachedTrafficSummary)
 
 	reportCacheMu.Lock()
+	// 先收集所有需要保存的数据，但不修改缓存
+	filteredByUUID := make(map[string][]v1.Report)
 	for uuid, x := range Records.Items() {
 		func() {
 			if uuid == "" {
@@ -73,7 +79,7 @@ func saveClientReportToDB(db *gorm.DB, now time.Time) error {
 				}
 			}
 
-			Records.Set(uuid, filtered, cache.DefaultExpiration)
+			filteredByUUID[uuid] = filtered
 
 			if len(filtered) > 0 {
 				r := utils.AverageReport(uuid, now, filtered, 0.3)
@@ -99,17 +105,17 @@ func saveClientReportToDB(db *gorm.DB, now time.Time) error {
 				dedupedTraffic[key] = summary
 			}
 		}
-		if err := db.Transaction(func(tx *gorm.DB) error {
-			if err := fillTrafficDeltas(tx, deduped, dedupedTraffic); err != nil {
-				return err
-			}
-			if err := tx.Model(&models.Record{}).Create(&deduped).Error; err != nil {
-				return err
-			}
-			return nil
-		}); err != nil {
-			log.Printf("Failed to save records to database: %v", err)
+		// 增量基线来自 metric store，记录写入 metric store。
+		if err := fillTrafficDeltasFromMetricStore(deduped, dedupedTraffic); err != nil {
+			log.Printf("Failed to fill traffic deltas from metric store: %v", err)
 			return err
+		}
+		ctx := context.Background()
+		for i := range deduped {
+			if err := metricstore.WriteRecord(ctx, deduped[i]); err != nil {
+				log.Printf("Failed to write record to metric store: %v", err)
+				return err
+			}
 		}
 	}
 
@@ -119,15 +125,37 @@ func saveClientReportToDB(db *gorm.DB, now time.Time) error {
 			key := rec.Client + "_" + strconv.Itoa(rec.DeviceIndex) + "_" + strconv.FormatInt(rec.Time.ToTime().Unix(), 10)
 			gpuUnique[key] = rec
 		}
-		var gpuDeduped []models.GPURecord
+		ctx := context.Background()
 		for _, rec := range gpuUnique {
-			gpuDeduped = append(gpuDeduped, rec)
-		}
-		if err := db.Model(&models.GPURecord{}).Create(&gpuDeduped).Error; err != nil {
-			log.Printf("Failed to save GPU records to database: %v", err)
-			return err
+			if err := metricstore.WriteGPURecord(ctx, rec); err != nil {
+				log.Printf("Failed to write GPU record to metric store: %v", err)
+				return err
+			}
 		}
 	}
+
+	// 数据成功写入后，才清理缓存中已处理的旧数据。
+	// 这里重新从当前缓存读取并按时间过滤，保留最近一分钟内的报告
+	// （包括写库期间新到达的报告），避免写库失败时丢失尚未持久化的历史数据。
+	reportCacheMu.Lock()
+	for uuid := range filteredByUUID {
+		cached, ok := Records.Get(uuid)
+		if !ok || cached == nil {
+			continue
+		}
+		reports, ok := cached.([]v1.Report)
+		if !ok {
+			continue
+		}
+		var remaining []v1.Report
+		for _, r := range reports {
+			if r.UpdatedAt.Unix() >= lastMinute {
+				remaining = append(remaining, r)
+			}
+		}
+		Records.Set(uuid, remaining, cache.DefaultExpiration)
+	}
+	reportCacheMu.Unlock()
 
 	return nil
 }
@@ -171,13 +199,16 @@ func summarizeCachedTraffic(reports []v1.Report) cachedTrafficSummary {
 }
 
 type previousTrafficRecord struct {
-	Client       string           `gorm:"column:client"`
-	Time         models.LocalTime `gorm:"column:time"`
-	NetTotalUp   int64            `gorm:"column:net_total_up"`
-	NetTotalDown int64            `gorm:"column:net_total_down"`
+	Client       string
+	Time         models.LocalTime
+	NetTotalUp   int64
+	NetTotalDown int64
 }
 
-func fillTrafficDeltas(db *gorm.DB, records []models.Record, trafficByRecord map[string]cachedTrafficSummary) error {
+// fillTrafficDeltasFromMetricStore 计算流量增量，基线（上一周期累计流量）从
+// metric store 查询。
+func fillTrafficDeltasFromMetricStore(records []models.Record, trafficByRecord map[string]cachedTrafficSummary) error {
+	ctx := context.Background()
 	recordsByTime := make(map[time.Time][]int)
 	for i := range records {
 		before := records[i].Time.ToTime().Round(0)
@@ -199,28 +230,33 @@ func fillTrafficDeltas(db *gorm.DB, records []models.Record, trafficByRecord map
 			clientUUIDs = append(clientUUIDs, clientUUID)
 		}
 
-		previousByClient, err := getLatestTrafficRecordsBefore(db, clientUUIDs, before)
+		baseline, err := metricstore.GetLatestTrafficBefore(ctx, clientUUIDs, before)
 		if err != nil {
-			return fmt.Errorf("load previous traffic records before %s: %w", before.Format(time.RFC3339), err)
+			return fmt.Errorf("load previous traffic from metric store before %s: %w", before.Format(time.RFC3339), err)
 		}
 
 		for _, index := range indexes {
+			var prev *previousTrafficRecord
+			if base, ok := baseline[records[index].Client]; ok {
+				prev = &previousTrafficRecord{
+					Client:       base.Client,
+					Time:         base.Time,
+					NetTotalUp:   base.NetTotalUp,
+					NetTotalDown: base.NetTotalDown,
+				}
+			}
+
 			key := recordDedupKey(records[index])
 			if summary, ok := trafficByRecord[key]; ok && len(summary.Points) > 0 {
-				if previous, exists := previousByClient[records[index].Client]; exists {
-					records[index].TrafficUp, records[index].TrafficDown = sumCachedTrafficDeltas(summary, &previous)
-				} else {
-					records[index].TrafficUp, records[index].TrafficDown = sumCachedTrafficDeltas(summary, nil)
-				}
+				records[index].TrafficUp, records[index].TrafficDown = sumCachedTrafficDeltas(summary, prev)
 				continue
 			}
 
-			previous, exists := previousByClient[records[index].Client]
-			if !exists {
+			if prev == nil {
 				continue
 			}
-			records[index].TrafficUp = utils.ComputeTrafficDelta(records[index].NetTotalUp, previous.NetTotalUp)
-			records[index].TrafficDown = utils.ComputeTrafficDelta(records[index].NetTotalDown, previous.NetTotalDown)
+			records[index].TrafficUp = utils.ComputeTrafficDelta(records[index].NetTotalUp, prev.NetTotalUp)
+			records[index].TrafficDown = utils.ComputeTrafficDelta(records[index].NetTotalDown, prev.NetTotalDown)
 		}
 	}
 
@@ -260,39 +296,4 @@ func sumCachedTrafficDeltas(summary cachedTrafficSummary, previous *previousTraf
 		previousTime = point.Time
 	}
 	return totalUp, totalDown
-}
-
-func getLatestTrafficRecordsBefore(db *gorm.DB, clientUUIDs []string, before time.Time) (map[string]previousTrafficRecord, error) {
-	previousByClient := make(map[string]previousTrafficRecord, len(clientUUIDs))
-	if len(clientUUIDs) == 0 {
-		return previousByClient, nil
-	}
-
-	for _, table := range []string{"records", "records_long_term"} {
-		records, err := latestTrafficRecordsBeforeFromTable(db, table, clientUUIDs, before)
-		if err != nil {
-			return nil, err
-		}
-		for _, record := range records {
-			previous, exists := previousByClient[record.Client]
-			if !exists || record.Time.ToTime().After(previous.Time.ToTime()) {
-				previousByClient[record.Client] = record
-			}
-		}
-	}
-	return previousByClient, nil
-}
-
-func latestTrafficRecordsBeforeFromTable(db *gorm.DB, table string, clientUUIDs []string, before time.Time) ([]previousTrafficRecord, error) {
-	var records []previousTrafficRecord
-	latestPerClient := db.Table(table).
-		Select("client, MAX(time) AS time").
-		Where("client IN ? AND time < ?", clientUUIDs, models.FromTime(before)).
-		Group("client")
-
-	err := db.Table(table+" AS r").
-		Select("r.client, r.time, r.net_total_up, r.net_total_down").
-		Joins("JOIN (?) AS latest ON latest.client = r.client AND latest.time = r.time", latestPerClient).
-		Find(&records).Error
-	return records, err
 }

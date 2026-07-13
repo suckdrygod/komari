@@ -43,6 +43,24 @@ func activeProviders() []namedProvider {
 	return providers
 }
 
+// Shutdown 销毁当前消息发送 provider，释放其持有的资源。供关闭流程调用。
+func Shutdown() error {
+	mu.Lock()
+	defer mu.Unlock()
+	var errs []error
+	for _, provider := range currentProviders {
+		if provider.provider != nil {
+			errs = append(errs, provider.provider.Destroy())
+		}
+	}
+	if len(currentProviders) == 0 && currentProvider != nil {
+		errs = append(errs, currentProvider.Destroy())
+	}
+	currentProviders = nil
+	currentProvider = nil
+	return errors.Join(errs...)
+}
+
 func Initialize() {
 	go func() {
 		once.Do(func() {

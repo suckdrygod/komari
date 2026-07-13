@@ -17,9 +17,8 @@ import (
 //
 // query.Tags is honored: only rollup series whose stored tag set matches the
 // filter are folded in, so a tag filter selects the same data it would over raw
-// points (each distinct tag combination is its own rollup series). With no tag
-// filter, all tag series within a bucket merge together, matching the raw path's
-// cross-tag aggregation.
+// points. By default, matched series are merged into each output bucket; callers
+// that need entity/tag identities preserved can set PreserveSeries.
 //
 // Every aggregation works except AggRate, which needs the ordered raw series and
 // is therefore raw-only. Percentiles (p50, p95, p99, and arbitrary pXX) are
@@ -32,9 +31,8 @@ import (
 // rollup 桶组成。
 //
 // query.Tags 会被遵守：只有存储标签集合匹配过滤条件的 rollup 序列会被合入，
-// 因此标签过滤会选中与原始点查询相同的数据（每个不同标签组合都是自己的
-// rollup 序列）。没有标签过滤时，同一桶内的所有标签序列会合并在一起，
-// 与原始路径的跨标签聚合一致。
+// 因此标签过滤会选中与原始点查询相同的数据。默认会把匹配序列合并进每个
+// 输出桶；需要保留 entity/tag 身份的调用方可以设置 PreserveSeries。
 //
 // 除 AggRate 外，每种聚合都可用；AggRate 需要有序原始序列，因此只能基于原始点。
 // 百分位（p50、p95、p99 和任意 pXX）通过合并每桶 t-digest 回答，因此能在
@@ -72,7 +70,7 @@ func (s *Store) AggregateRollup(ctx context.Context, query AggregateQuery, resol
 	if err != nil {
 		return nil, err
 	}
-	groups := foldRollupRows(nil, rows, query.Interval, comp)
+	groups := foldRollupRows(nil, rows, query.Interval, comp, query.PreserveSeries)
 
 	out, err := rollupGroupsToPoints(groups, query)
 	if err != nil {
@@ -89,27 +87,103 @@ func (s *Store) AggregateRollup(ctx context.Context, query AggregateQuery, resol
 // rollupGroupsToPoints 将合并后的输出桶转换为有序 AggregatePoint，并根据
 // 每个桶的摘要或 digest 计算请求的聚合。FillEmpty 会为空洞输出零计数桶，
 // 与原始 AggregatePoints 行为一致。
-func rollupGroupsToPoints(groups map[int64]*rollupBucket, query AggregateQuery) ([]AggregatePoint, error) {
-	var bucketStarts []int64
-	if query.FillEmpty {
-		for t := alignTime(query.Start, query.Interval); !t.After(query.End); t = t.Add(query.Interval) {
-			bucketStarts = append(bucketStarts, t.UnixNano())
-		}
-	} else {
-		for k := range groups {
-			bucketStarts = append(bucketStarts, k)
-		}
-		sort.Slice(bucketStarts, func(i, j int) bool { return bucketStarts[i] < bucketStarts[j] })
+func rollupGroupsToPoints(groups map[rollupKey]*rollupBucket, query AggregateQuery) ([]AggregatePoint, error) {
+	if !query.PreserveSeries {
+		return mergedRollupGroupsToPoints(groups, query)
 	}
 
-	out := make([]AggregatePoint, 0, len(bucketStarts))
-	for _, start := range bucketStarts {
-		b := groups[start]
+	var keys []rollupKey
+	seriesTags := make(map[rollupSeriesKey]string)
+	if query.FillEmpty {
+		series := rollupSeriesKeys(groups)
+		if len(series) == 0 {
+			tagsHash, tagsJSON, err := tagsFingerprint(query.Tags)
+			if err != nil {
+				return nil, err
+			}
+			series = append(series, rollupSeriesKey{entityID: query.EntityID, tagsHash: tagsHash})
+			seriesTags[series[0]] = tagsJSON
+		} else {
+			for _, key := range series {
+				seriesTags[key] = rollupSeriesTagsJSON(groups, key)
+			}
+		}
+		for t := alignTime(query.Start, query.Interval); !t.After(query.End); t = t.Add(query.Interval) {
+			bucket := t.UnixNano()
+			for _, seriesKey := range series {
+				keys = append(keys, rollupKey{
+					entityID: seriesKey.entityID,
+					tagsHash: seriesKey.tagsHash,
+					bucket:   bucket,
+				})
+			}
+		}
+	} else {
+		for key := range groups {
+			keys = append(keys, key)
+		}
+		sortRollupKeys(keys)
+	}
+
+	out := make([]AggregatePoint, 0, len(keys))
+	for _, key := range keys {
+		b := groups[key]
+		if b == nil {
+			tags, err := rollupTagsFromJSON(seriesTags[rollupSeriesKey{entityID: key.entityID, tagsHash: key.tagsHash}])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, AggregatePoint{
+				MetricName: query.MetricName,
+				EntityID:   key.entityID,
+				Bucket:     time.Unix(0, key.bucket).UTC(),
+				Tags:       tags,
+			})
+			continue
+		}
+		v, ok := b.value(query.Aggregation)
+		if !ok {
+			return nil, fmt.Errorf("%w: aggregation %q not supported over rollups", ErrInvalidArgument, query.Aggregation)
+		}
+		tags, err := rollupTagsFromJSON(b.tagsJSON)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, AggregatePoint{
+			MetricName: query.MetricName,
+			EntityID:   key.entityID,
+			Bucket:     time.Unix(0, key.bucket).UTC(),
+			Value:      v,
+			Count:      int(b.count),
+			Tags:       tags,
+		})
+	}
+	return out, nil
+}
+
+func mergedRollupGroupsToPoints(groups map[rollupKey]*rollupBucket, query AggregateQuery) ([]AggregatePoint, error) {
+	var keys []rollupKey
+	if query.FillEmpty {
+		for t := alignTime(query.Start, query.Interval); !t.After(query.End); t = t.Add(query.Interval) {
+			keys = append(keys, rollupKey{bucket: t.UnixNano()})
+		}
+	} else {
+		for key := range groups {
+			keys = append(keys, key)
+		}
+		sortRollupKeys(keys)
+	}
+
+	tags := cloneStringMap(query.Tags)
+	out := make([]AggregatePoint, 0, len(keys))
+	for _, key := range keys {
+		b := groups[key]
 		if b == nil {
 			out = append(out, AggregatePoint{
 				MetricName: query.MetricName,
 				EntityID:   query.EntityID,
-				Bucket:     time.Unix(0, start).UTC(),
+				Bucket:     time.Unix(0, key.bucket).UTC(),
+				Tags:       cloneStringMap(tags),
 			})
 			continue
 		}
@@ -120,9 +194,10 @@ func rollupGroupsToPoints(groups map[int64]*rollupBucket, query AggregateQuery) 
 		out = append(out, AggregatePoint{
 			MetricName: query.MetricName,
 			EntityID:   query.EntityID,
-			Bucket:     time.Unix(0, start).UTC(),
+			Bucket:     time.Unix(0, key.bucket).UTC(),
 			Value:      v,
 			Count:      int(b.count),
+			Tags:       cloneStringMap(tags),
 		})
 	}
 	return out, nil
@@ -214,17 +289,20 @@ func (s *Store) scanRollupRowsBetween(ctx context.Context, metricName, entityID 
 // foldRollupRows 将存储的 rollup 行折叠进 interval 宽的输出桶，按桶合并摘要
 // （包括 t-digest）。groups 可为 nil，此时会分配新 map；传入已有 map 可让调用方
 // 把 rollup 和 raw 的贡献累加到同一批输出桶中。
-func foldRollupRows(groups map[int64]*rollupBucket, rows []storedRollup, interval time.Duration, comp float64) map[int64]*rollupBucket {
+func foldRollupRows(groups map[rollupKey]*rollupBucket, rows []storedRollup, interval time.Duration, comp float64, preserveSeries bool) map[rollupKey]*rollupBucket {
 	if groups == nil {
-		groups = make(map[int64]*rollupBucket)
+		groups = make(map[rollupKey]*rollupBucket)
 	}
 	size := interval.Nanoseconds()
 	for _, r := range rows {
 		bkt := floorDivNano(r.bucket, size)
-		b := groups[bkt]
+		key := foldedRollupKey(r.entityID, r.bucketData.tagsHash, bkt, preserveSeries)
+		b := groups[key]
 		if b == nil {
 			b = newRollupBucket(comp)
-			groups[bkt] = b
+			b.tagsHash = r.bucketData.tagsHash
+			b.tagsJSON = r.bucketData.tagsJSON
+			groups[key] = b
 		}
 		b.mergeStored(r.bucketData)
 	}
@@ -240,22 +318,91 @@ func foldRollupRows(groups map[int64]*rollupBucket, rows []storedRollup, interva
 // foldRawPoints 将原始点折叠进 interval 宽的输出桶，把每个观测值加入对应桶的
 // 累加器。它与 foldRollupRows 共用桶 map，因此混合查询可以把旧 rollup 半边和
 // 近期 raw 半边合并到同一批输出桶中并一起聚合（跨边界的 count/avg/百分位正确）。
-func foldRawPoints(groups map[int64]*rollupBucket, points []Point, interval time.Duration, comp float64) map[int64]*rollupBucket {
+func foldRawPoints(groups map[rollupKey]*rollupBucket, points []Point, interval time.Duration, comp float64, preserveSeries bool) (map[rollupKey]*rollupBucket, error) {
 	if groups == nil {
-		groups = make(map[int64]*rollupBucket)
+		groups = make(map[rollupKey]*rollupBucket)
 	}
 	size := interval.Nanoseconds()
 	for _, p := range points {
+		p = p.normalized()
+		tagsHash, tagsJSON, err := tagsFingerprint(p.Tags)
+		if err != nil {
+			return nil, err
+		}
 		ts := p.Timestamp.UTC().UnixNano()
 		bkt := floorDivNano(ts, size)
-		b := groups[bkt]
+		key := foldedRollupKey(p.EntityID, tagsHash, bkt, preserveSeries)
+		b := groups[key]
 		if b == nil {
 			b = newRollupBucket(comp)
-			groups[bkt] = b
+			b.tagsHash = tagsHash
+			b.tagsJSON = tagsJSON
+			groups[key] = b
 		}
 		b.addPoint(p.Value, ts)
 	}
-	return groups
+	return groups, nil
+}
+
+func foldedRollupKey(entityID, tagsHash string, bucket int64, preserveSeries bool) rollupKey {
+	if !preserveSeries {
+		return rollupKey{bucket: bucket}
+	}
+	return rollupKey{entityID: entityID, tagsHash: tagsHash, bucket: bucket}
+}
+
+type rollupSeriesKey struct {
+	entityID string
+	tagsHash string
+}
+
+func rollupSeriesKeys(groups map[rollupKey]*rollupBucket) []rollupSeriesKey {
+	seen := make(map[rollupSeriesKey]struct{})
+	keys := make([]rollupSeriesKey, 0)
+	for key := range groups {
+		series := rollupSeriesKey{entityID: key.entityID, tagsHash: key.tagsHash}
+		if _, ok := seen[series]; ok {
+			continue
+		}
+		seen[series] = struct{}{}
+		keys = append(keys, series)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].entityID != keys[j].entityID {
+			return keys[i].entityID < keys[j].entityID
+		}
+		return keys[i].tagsHash < keys[j].tagsHash
+	})
+	return keys
+}
+
+func rollupSeriesTagsJSON(groups map[rollupKey]*rollupBucket, series rollupSeriesKey) string {
+	for key, bucket := range groups {
+		if key.entityID == series.entityID && key.tagsHash == series.tagsHash && bucket != nil {
+			return bucket.tagsJSON
+		}
+	}
+	return "{}"
+}
+
+func sortRollupKeys(keys []rollupKey) {
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].bucket != keys[j].bucket {
+			return keys[i].bucket < keys[j].bucket
+		}
+		if keys[i].entityID != keys[j].entityID {
+			return keys[i].entityID < keys[j].entityID
+		}
+		return keys[i].tagsHash < keys[j].tagsHash
+	})
+}
+
+func rollupTagsFromJSON(tagsJSON string) (map[string]string, error) {
+	tags, err := decodeMapString(tagsJSON)
+	if err != nil {
+		return nil, err
+	}
+	return cloneStringMap(tags), nil
 }
 
 // scanStoredRollups reconstructs storedRollup rows (including tag identity and
@@ -332,6 +479,68 @@ func rawTagsToJSON(v any) (string, error) {
 	}
 }
 
+// CompatibleSeriesInterval raises an output interval when the requested window
+// is only covered by a coarser rollup tier. If the requested start predates all
+// retained tiers, it uses the longest-retained tier so the available portion of
+// the window can still be returned.
+func (s *Store) CompatibleSeriesInterval(start, now time.Time, interval time.Duration) time.Duration {
+	policy := s.cfg.RollupPolicy
+	if interval <= 0 || !policy.Enabled() {
+		return interval
+	}
+
+	start = start.UTC()
+	now = now.UTC()
+	rawCutoff := policy.rawCutoff(now)
+	if rawCutoff.IsZero() || !start.Before(rawCutoff) {
+		return interval
+	}
+
+	var fallback *RollupTier
+	for i := range policy.Tiers {
+		tier := &policy.Tiers[i]
+		fallback = tier
+		if now.Add(-tier.Retention).After(start) {
+			continue
+		}
+		if interval < tier.Interval {
+			return tier.Interval
+		}
+		if remainder := interval % tier.Interval; remainder != 0 {
+			return interval + tier.Interval - remainder
+		}
+		return interval
+	}
+
+	if fallback != nil {
+		if interval < fallback.Interval {
+			return fallback.Interval
+		}
+		if remainder := interval % fallback.Interval; remainder != 0 {
+			return interval + fallback.Interval - remainder
+		}
+	}
+	return interval
+}
+
+// bestRollupTier returns the finest compatible tier that covers start. When
+// start is older than every retained tier, it returns the longest-retained
+// compatible tier so callers still receive the retained intersection.
+func bestRollupTier(policy RollupPolicy, interval time.Duration, start, now time.Time) *RollupTier {
+	var fallback *RollupTier
+	for i := range policy.Tiers {
+		tier := &policy.Tiers[i]
+		if interval < tier.Interval || interval%tier.Interval != 0 {
+			continue
+		}
+		fallback = tier
+		if !now.Add(-tier.Retention).After(start) {
+			return tier
+		}
+	}
+	return fallback
+}
+
 // Series answers an AggregateQuery by transparently choosing the best data
 // source for the requested window, given `now`:
 //
@@ -343,8 +552,9 @@ func rawTagsToJSON(v any) (string, error) {
 //   - If the query spans the raw retention boundary, it uses a hybrid approach:
 //     read rollups for the old part and raw for the recent part, then merge
 //     the results to avoid losing uncompacted recent data.
-//   - If no tier qualifies, it falls back to raw (which may be incomplete for
-//     data already aged out) so the call still returns its best answer.
+//   - If the start predates every retained tier, it reads the longest-retained
+//     compatible tier and returns the available intersection of the window.
+//   - It falls back to raw only when no rollup tier is interval-compatible.
 //
 // query.Tags is honored on both branches: the raw path already filters by tag,
 // and the rollup path filters by the stored tag set, so a tag filter selects the
@@ -360,8 +570,9 @@ func rawTagsToJSON(v any) (string, error) {
 //     query.Interval，且 (b) 保留时间能覆盖到窗口起点，然后从该层服务查询。
 //   - 如果查询跨越原始数据保留期边界，它使用混合方式：读取旧部分的 rollup
 //     和最近部分的原始点，然后合并结果，避免丢掉未 compact 的最近数据。
-//   - 如果没有层级符合条件，它会回退到原始点（对于已经过期的数据可能不完整），
-//     让调用仍返回当前能给出的最佳答案。
+//   - 如果起点早于所有层级的保留窗口，它会读取保留时间最长的兼容层级，返回请求
+//     窗口与实际保留数据的交集。
+//   - 只有没有任何层级与输出间隔兼容时才回退到原始点。
 //
 // query.Tags 在两条分支上都会被遵守：原始路径已按标签过滤，rollup 路径会按
 // 存储的标签集合过滤，因此无论由哪个数据源回答，标签过滤都会选择相同序列。
@@ -393,29 +604,9 @@ func (s *Store) Series(ctx context.Context, query AggregateQuery, now time.Time)
 		return s.Aggregate(ctx, query)
 	}
 
-	if q.Start.Before(rawCutoff) && !q.End.Before(rawCutoff) {
-		for _, tier := range policy.Tiers { // finest-first
-			if query.Interval < tier.Interval || query.Interval%tier.Interval != 0 {
-				continue
-			}
-			if now.Add(-tier.Retention).After(q.Start) {
-				continue
-			}
-			return s.seriesHybrid(ctx, query, rawCutoff, &tier)
-		}
-	}
-
-	// Find the finest tier that can serve the entire window from the start.
-	var servicingTier *RollupTier
-	for _, tier := range policy.Tiers { // finest-first
-		if query.Interval < tier.Interval || query.Interval%tier.Interval != 0 {
-			continue
-		}
-		if now.Add(-tier.Retention).After(q.Start) {
-			continue // tier doesn't reach back to the window start
-		}
-		servicingTier = &tier
-		break
+	servicingTier := bestRollupTier(policy, query.Interval, q.Start, now)
+	if q.Start.Before(rawCutoff) && !q.End.Before(rawCutoff) && servicingTier != nil {
+		return s.seriesHybrid(ctx, query, rawCutoff, servicingTier)
 	}
 
 	if servicingTier == nil {
@@ -438,9 +629,10 @@ func (s *Store) Series(ctx context.Context, query AggregateQuery, now time.Time)
 // into one rollupBucket per output bucket fixes that: count, sum/avg, min/max and
 // percentiles are computed over the union of the two halves.
 //
-// To avoid double counting or gaps, the caller passes a boundary already aligned
-// to a rollup-resolution bucket. The rollup half supplies whole buckets strictly
-// before the boundary and the raw half supplies points at or after it.
+// The rollup bucket containing the raw cutoff may be partial: compaction only
+// folds points older than the cutoff into it. Include that bucket, then add raw
+// points at or after the cutoff, so the two halves neither overlap nor leave a
+// gap when the selected rollup resolution is coarser than raw retention.
 //
 // seriesHybrid 回答跨越原始保留期边界的查询：读取旧部分的 rollup 和近期部分的
 // 原始点，并在归约前把两者折叠进同一批 query.Interval 宽的输出桶。
@@ -451,8 +643,8 @@ func (s *Store) Series(ctx context.Context, query AggregateQuery, now time.Time)
 // 结果却只剩 raw 样本，count/avg 错误）。把两半折叠进同一个 rollupBucket 即可修复：
 // count、sum/avg、min/max 和百分位都在两半的并集上计算。
 //
-// 为避免重复计数或留空，调用方传入的边界已经对齐到 rollup 分辨率桶。rollup 半边
-// 提供严格早于该边界的完整桶，raw 半边提供该边界及之后的点。
+// 包含 raw 截止点的 rollup 桶可能尚未完整；它只包含截止点之前已压缩的数据。读取
+// 该桶，再合入截止点及之后的 raw 点，可以在粗粒度层级上避免重叠和缺口。
 func (s *Store) seriesHybrid(ctx context.Context, query AggregateQuery, boundary time.Time, tier *RollupTier) ([]AggregatePoint, error) {
 	q := query.Query.normalized()
 	comp := s.cfg.RollupPolicy.compression()
@@ -461,22 +653,17 @@ func (s *Store) seriesHybrid(ctx context.Context, query AggregateQuery, boundary
 	endNano := q.End.UnixNano()
 	splitAt := boundary.UTC().UnixNano()
 
-	groups := make(map[int64]*rollupBucket)
+	groups := make(map[rollupKey]*rollupBucket)
 
-	// Old half: rollup buckets fully contained in [Start, min(splitAt, End]].
-	// "Fully before splitAt" is bucket <= splitAt-resNano (splitAt is aligned);
-	// also clamp to the query's own inclusive end so a bucket past End is never
-	// pulled in when splitAt overshoots a short window.
-	upperBucket := splitAt - resNano
-	if clamp := endNano - resNano + 1; clamp < upperBucket {
-		upperBucket = clamp
-	}
+	// Old half: include the rollup bucket containing splitAt. That bucket only
+	// contains compacted points before splitAt; the raw half starts at splitAt.
+	upperBucket := floorDivNano(splitAt, resNano)
 	if upperBucket >= startNano {
 		rows, err := s.scanRollupRowsBetween(ctx, q.MetricName, q.EntityID, q.Tags, resNano, startNano, upperBucket)
 		if err != nil {
 			return nil, err
 		}
-		foldRollupRows(groups, rows, query.Interval, comp)
+		foldRollupRows(groups, rows, query.Interval, comp, query.PreserveSeries)
 	}
 
 	// Recent half: raw points in [splitAt, End]. Reuse the raw Query path so the
@@ -492,7 +679,9 @@ func (s *Store) seriesHybrid(ctx context.Context, query AggregateQuery, boundary
 		if err != nil {
 			return nil, err
 		}
-		foldRawPoints(groups, points, query.Interval, comp)
+		if _, err := foldRawPoints(groups, points, query.Interval, comp, query.PreserveSeries); err != nil {
+			return nil, err
+		}
 	}
 
 	out, err := rollupGroupsToPoints(groups, query)

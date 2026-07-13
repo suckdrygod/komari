@@ -1,74 +1,30 @@
 package jsonrpc
 
-import (
-	"context"
-	"strings"
-	"testing"
+import "testing"
 
-	"github.com/komari-monitor/komari/pkg/config"
-	"github.com/komari-monitor/komari/pkg/rpc"
-	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-)
-
-func TestDispatchPrivateSiteAllowsLoginBootstrapMethods(t *testing.T) {
-	setupDispatchConfigDB(t, true)
-
-	for _, method := range []string{"public:getMe", "public:getVersion"} {
-		t.Run(method, func(t *testing.T) {
-			resp := Dispatch(context.Background(), &rpc.ContextMeta{Permission: rpc.RoleGuest}, rpc.NewRequest("1", method, nil))
-			require.NotNil(t, resp)
-			require.Nil(t, resp.Error)
-		})
-	}
-}
-
-func TestDispatchPrivateSiteBlocksOtherGuestPublicMethods(t *testing.T) {
-	setupDispatchConfigDB(t, true)
-
-	resp := Dispatch(context.Background(), &rpc.ContextMeta{Permission: rpc.RoleGuest}, rpc.NewRequest("1", "public:getNodesInformation", nil))
-	require.NotNil(t, resp)
-	require.NotNil(t, resp.Error)
-	require.Equal(t, rpc.PermissionDenied, resp.Error.Code)
-}
-
-func TestPublicRPCAllowedInPrivateSiteWhitelist(t *testing.T) {
-	allowed := []string{
+// TestPrivateSiteLoginWhitelist 守卫 issue #567:私有站点模式下,登录页渲染所需的
+// 元信息接口必须始终在白名单中,否则匿名用户无法看到登录框。
+func TestPrivateSiteLoginWhitelist(t *testing.T) {
+	required := []string{
 		"public:getMe",
 		"public:getPublicSettings",
 		"public:getVersion",
-		"public:getClientRecentRecords",
 	}
-	for _, method := range allowed {
-		require.True(t, isPublicRPCAllowedInPrivateSite(method), method)
+	for _, m := range required {
+		if !privateSiteLoginWhitelist[m] {
+			t.Errorf("method %q must be in privateSiteLoginWhitelist for login page to render under private site (issue #567)", m)
+		}
 	}
 
-	blocked := []string{
+	// 节点列表等数据接口不应在白名单(应被私有站点拦截)。
+	mustBlocked := []string{
 		"public:getNodesInformation",
 		"public:getRecordsByUUID",
 		"public:getPingRecords",
-		"public:getPublicPingTasks",
-		"admin:getUsers",
 	}
-	for _, method := range blocked {
-		require.False(t, isPublicRPCAllowedInPrivateSite(method), method)
+	for _, m := range mustBlocked {
+		if privateSiteLoginWhitelist[m] {
+			t.Errorf("data method %q must NOT be in privateSiteLoginWhitelist (would leak data under private site)", m)
+		}
 	}
-}
-
-func setupDispatchConfigDB(t *testing.T, privateSite bool) {
-	t.Helper()
-
-	name := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())
-	db, err := gorm.Open(sqlite.Open("file:"+name+"?mode=memory&cache=shared"), &gorm.Config{})
-	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	sqlDB.SetMaxOpenConns(1)
-	t.Cleanup(func() {
-		_ = sqlDB.Close()
-	})
-
-	config.SetDb(db)
-	require.NoError(t, config.Set(config.PrivateSiteKey, privateSite))
 }

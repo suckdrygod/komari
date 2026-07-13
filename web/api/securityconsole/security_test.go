@@ -1,12 +1,27 @@
 package securityconsole
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/komari-monitor/komari/cmd/flags"
 	"github.com/komari-monitor/komari/database/models"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestMain(m *testing.M) {
+	tempDir, err := os.MkdirTemp("", "komari-securityconsole-test-*")
+	if err != nil {
+		panic(err)
+	}
+	flags.DatabaseFile = filepath.Join(tempDir, "komari.db")
+
+	code := m.Run()
+	_ = os.RemoveAll(tempDir)
+	os.Exit(code)
+}
 
 func TestAttackFromOldAuditLog(t *testing.T) {
 	entry := models.Log{

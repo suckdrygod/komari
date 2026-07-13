@@ -50,6 +50,11 @@ type Store struct {
 	//
 	// tables 保存当前 Store 的实际表名。
 	tables tables
+	// maintenanceMu serializes physical storage maintenance while allowing
+	// concurrent size reads.
+	//
+	// maintenanceMu 串行化物理存储维护，同时允许并发读取存储大小。
+	maintenanceMu sync.RWMutex
 	// mu protects closed state.
 	//
 	// mu 保护 closed 状态。
@@ -757,6 +762,63 @@ func (s *Store) Query(ctx context.Context, query Query) ([]Point, error) {
 	return out, nil
 }
 
+// EntityIDs returns distinct entity ids that have raw or rollup data matching a query.
+//
+// EntityIDs 返回在原始点或 rollup 中匹配查询条件的实体 ID。
+func (s *Store) EntityIDs(ctx context.Context, query Query) ([]string, error) {
+	if err := s.ensureOpen(); err != nil {
+		return nil, err
+	}
+	if err := query.Validate(); err != nil {
+		return nil, err
+	}
+	query = query.normalized()
+
+	pointsWhere, args := s.buildWhere(query)
+	rollupArgsStart := len(args)
+	rollupArgs := []any{query.MetricName, query.Start.UnixNano(), query.End.UnixNano()}
+	rollupParts := []string{
+		"metric_name = " + s.dialect.placeholder(rollupArgsStart+1),
+		"bucket_nano >= " + s.dialect.placeholder(rollupArgsStart+2),
+		"bucket_nano <= " + s.dialect.placeholder(rollupArgsStart+3),
+	}
+	if strings.TrimSpace(query.EntityID) != "" {
+		rollupArgs = append(rollupArgs, query.EntityID)
+		rollupParts = append(rollupParts, "entity_id = "+s.dialect.placeholder(rollupArgsStart+len(rollupArgs)))
+	}
+	for _, k := range sortedKeys(query.Tags) {
+		rollupArgs = append(rollupArgs, query.Tags[k])
+		rollupParts = append(rollupParts, s.dialect.jsonExtractEquals("tags", k, s.dialect.placeholder(rollupArgsStart+len(rollupArgs))))
+	}
+	args = append(args, rollupArgs...)
+
+	sqlText := fmt.Sprintf(`SELECT DISTINCT entity_id FROM (
+SELECT entity_id FROM %s WHERE %s
+UNION
+SELECT entity_id FROM %s WHERE %s
+) AS metric_entities ORDER BY entity_id ASC`,
+		s.tables.points, pointsWhere,
+		s.tables.rollups, strings.Join(rollupParts, " AND "),
+	)
+	rows, err := s.reader().QueryContext(ctx, sqlText, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var entityID string
+		if err := rows.Scan(&entityID); err != nil {
+			return nil, err
+		}
+		if entityID != "" {
+			out = append(out, entityID)
+		}
+	}
+	return out, rows.Err()
+}
+
 // Latest loads the newest points for a metric and entity.
 //
 // Latest 查询某指标和实体的最新采样点。
@@ -881,7 +943,7 @@ func (s *Store) aggregateInSQL(ctx context.Context, query AggregateQuery, valueE
 	// bucket column so writes stay cheap and the bucket size can vary per query.
 	bucketExpr := fmt.Sprintf("(ts_nano - ((ts_nano %% %d) + %d) %% %d)", interval, interval, interval)
 	sqlText := fmt.Sprintf(
-		`SELECT %s AS bucket, %s AS agg_value, COUNT(*) AS agg_count FROM %s WHERE %s GROUP BY bucket ORDER BY bucket ASC`,
+		`SELECT %s AS bucket, metric_name, entity_id, tags_hash, tags, %s AS agg_value, COUNT(*) AS agg_count FROM %s WHERE %s GROUP BY bucket, metric_name, entity_id, tags_hash, tags ORDER BY bucket ASC, metric_name ASC, entity_id ASC, tags_hash ASC`,
 		bucketExpr, valueExpr, s.tables.points, where,
 	)
 	// Page over aggregate buckets (BucketLimit/BucketOffset), not raw points.
@@ -903,17 +965,25 @@ func (s *Store) aggregateInSQL(ctx context.Context, query AggregateQuery, valueE
 	out := make([]AggregatePoint, 0)
 	for rows.Next() {
 		var bucket int64
+		var metricName, entityID, tagsHash string
+		var rawTags any
 		var value float64
 		var count int
-		if err := rows.Scan(&bucket, &value, &count); err != nil {
+		if err := rows.Scan(&bucket, &metricName, &entityID, &tagsHash, &rawTags, &value, &count); err != nil {
+			return nil, err
+		}
+		_ = tagsHash
+		tags, err := decodeMap(rawTags)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, AggregatePoint{
-			MetricName: q.MetricName,
-			EntityID:   q.EntityID,
+			MetricName: metricName,
+			EntityID:   entityID,
 			Bucket:     time.Unix(0, bucket).UTC(),
 			Value:      value,
 			Count:      count,
+			Tags:       tags,
 		})
 	}
 	return out, rows.Err()

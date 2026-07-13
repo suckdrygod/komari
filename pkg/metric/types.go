@@ -143,9 +143,9 @@ type Definition struct {
 	//
 	// Unit 表示数值单位，例如 bytes 或 percent。
 	Unit string `json:"unit,omitempty"`
-	// RetentionDays controls raw-point retention for this metric.
+	// RetentionDays controls historical data retention for this metric.
 	//
-	// RetentionDays 控制该指标原始点的保留天数。
+	// RetentionDays 控制该指标历史数据的保留天数。
 	RetentionDays int `json:"retention_days,omitempty"`
 	// Metadata stores caller-defined metric metadata.
 	//
@@ -349,6 +349,13 @@ type AggregateQuery struct {
 	//
 	// FillEmpty 会为空时间段输出零计数桶。
 	FillEmpty bool `json:"fill_empty,omitempty"`
+	// PreserveSeries keeps entity/tag identities as separate aggregate series on
+	// rollup-backed reads. The default preserves the historical rollup behavior
+	// of merging all matched series into each output bucket.
+	//
+	// PreserveSeries 在基于 rollup 的读取中保留 entity/tag 维度为独立聚合序列。
+	// 默认值保留历史 rollup 行为：把匹配到的序列合并进同一个输出桶。
+	PreserveSeries bool `json:"preserve_series,omitempty"`
 	// BucketLimit and BucketOffset page over the produced aggregate buckets, not
 	// the underlying raw points. They are applied consistently across every
 	// backend and aggregation type. The embedded Query.Limit/Query.Offset are
@@ -416,6 +423,10 @@ type AggregatePoint struct {
 	//
 	// Count 是该桶代表的点数量。
 	Count int `json:"count"`
+	// Tags identify the logical series represented by the bucket.
+	//
+	// Tags 标识该聚合桶所属的逻辑序列。
+	Tags map[string]string `json:"tags,omitempty"`
 }
 
 // Stats stores or computes summary statistics for a point series.

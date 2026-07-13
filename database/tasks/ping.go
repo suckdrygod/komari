@@ -1,9 +1,11 @@
 package tasks
 
 import (
+	"context"
 	"time"
 
 	"github.com/komari-monitor/komari/database/dbcore"
+	"github.com/komari-monitor/komari/database/metricstore"
 	"github.com/komari-monitor/komari/database/models"
 	"github.com/komari-monitor/komari/utils"
 	"gorm.io/gorm"
@@ -125,34 +127,25 @@ func UpdatePingTaskOrder(order map[uint]int) error {
 	return nil
 }
 
+// ping 记录已完全迁移到 metric store（指标 ping.latency_ms），运行期读写全部走
+// metric store，旧 ping_records 表不再参与。
+
 func SavePingRecord(record models.PingRecord) error {
-	db := dbcore.GetDBInstance()
-	return db.Create(&record).Error
+	return metricstore.WritePingRecord(context.Background(), record)
 }
 
 func DeletePingRecordsBefore(time time.Time) error {
-	db := dbcore.GetDBInstance()
-	err := db.Where("time < ?", time).Delete(&models.PingRecord{}).Error
-	return err
+	return metricstore.DeletePingRecordsBefore(context.Background(), time)
 }
 
 func DeletePingRecords(id []uint) error {
-	db := dbcore.GetDBInstance()
-	result := db.Where("task_id IN ?", id).Delete(&models.PingRecord{})
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return result.Error
+	return metricstore.DeletePingRecordsByTask(context.Background(), id)
 }
 
 func DeleteAllPingRecords() error {
-	db := dbcore.GetDBInstance()
-	result := db.Exec("DELETE FROM ping_records")
-	if result.RowsAffected == 0 {
-		return gorm.ErrRecordNotFound
-	}
-	return result.Error
+	return metricstore.DeleteAllPingRecords(context.Background())
 }
+
 func ReloadPingSchedule() error {
 	db := dbcore.GetDBInstance()
 	var pingTasks []models.PingTask
@@ -201,17 +194,5 @@ func AddDefaultOnClientUUID(uuid string) error {
 }
 
 func GetPingRecords(uuid string, taskId int, start, end time.Time) ([]models.PingRecord, error) {
-	db := dbcore.GetDBInstance()
-	var records []models.PingRecord
-	dbQuery := db.Model(&models.PingRecord{})
-	if uuid != "" {
-		dbQuery = dbQuery.Where("client = ?", uuid)
-	}
-	if taskId >= 0 {
-		dbQuery = dbQuery.Where("task_id = ?", uint(taskId))
-	}
-	if err := dbQuery.Where("time >= ? AND time <= ?", start, end).Order("time DESC").Find(&records).Error; err != nil {
-		return nil, err
-	}
-	return records, nil
+	return metricstore.GetPingRecords(context.Background(), uuid, taskId, start, end)
 }

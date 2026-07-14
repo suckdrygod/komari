@@ -83,7 +83,7 @@ func TestSetCommandsAndGetUpdates(t *testing.T) {
 
 	b := &bot{baseURL: server.URL + "/bot-token", chatID: 42, client: server.Client()}
 	require.NoError(t, b.configureMenu(context.Background()))
-	assert.Equal(t, 13, commandCount)
+	assert.Equal(t, 15, commandCount)
 	assert.True(t, menuButtonSet)
 
 	updates, err := b.getUpdates(context.Background(), 10)

@@ -19,6 +19,12 @@ Komari is a lightweight, self-hosted server monitoring tool designed to provide 
 > [!TIP]
 > This fork includes Telegram traffic menus, reset-day reminders, TCP-safe agent deployment, and SSH Auth Guard alerts. See the Chinese beginner guide: [自用安全版部署教程](./docs/suckdry-deployment_zh.md).
 
+## Fork updates
+
+- Expanded the Telegram command menu with traffic, status, reset-day, and manual calibration workflows.
+- Added WAN-counter calibration with safe re-anchoring and counter-reset handling.
+- Updated deployment helpers and alerting behavior for self-hosted installations.
+
 ## Features
 
 - **Lightweight and Efficient**: Low resource consumption, suitable for servers of all sizes.

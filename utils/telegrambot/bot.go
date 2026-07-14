@@ -321,6 +321,10 @@ func (b *bot) handleCommand(ctx context.Context, text string) {
 	case "/report":
 		b.sendRange(ctx, "today", selector)
 		b.sendCycle(ctx, selector)
+	case "/dmitcal":
+		b.sendDMITCalibration(ctx, selector)
+	case "/noslacal":
+		b.sendNoSLACalibration(ctx, selector)
 	default:
 		_ = b.send(ctx, "未知命令。使用 /help 查看菜单。", nil)
 	}
@@ -382,6 +386,8 @@ func (b *bot) configureMenu(ctx context.Context) error {
 		{"command": "resetlist", "description": "列出所有机器重置日设置"},
 		{"command": "status", "description": "查询机器在线与运行状态"},
 		{"command": "report", "description": "立即生成完整流量报告"},
+		{"command": "dmitcal", "description": "校准 DMIT/NoSLA 流量"},
+		{"command": "noslacal", "description": "校准 NoSLA 流量"},
 		{"command": "help", "description": "查看命令使用说明"},
 	}
 	encoded, _ := json.Marshal(commands)
@@ -547,6 +553,12 @@ func helpText() string {
 /nodes — 选择监控机器
 /status — 在线与运行状态
 /report — 立即生成完整报告
+
+<b>🛠 DMIT 校准</b>
+/dmitcal CORONA 1.07TB
+/dmitcal TINY 33.12GB
+/dmitcal NOSLA 83.52GB
+/noslacal 83.52GB
 
 <b>💡 使用提示</b>
 命令后可附机器名称或 UUID；不填写时查询全部机器。`

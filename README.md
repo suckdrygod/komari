@@ -24,6 +24,7 @@ Komari is a lightweight, self-hosted server monitoring tool designed to provide 
 - Expanded the Telegram command menu with traffic, status, reset-day, and manual calibration workflows.
 - Added WAN-counter calibration with safe re-anchoring and counter-reset handling.
 - Updated deployment helpers and alerting behavior for self-hosted installations.
+- Added official V.PS (`vps.hosting`) service bandwidth API integration; see [V.PS 流量 API 配置说明](./docs/official-traffic-vps-hosting_zh.md).
 
 ## Features
 

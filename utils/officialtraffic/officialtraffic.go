@@ -21,18 +21,25 @@ import (
 )
 
 const (
-	ConfigKey              = "official_traffic_sources"
-	defaultBandwagonAPIURL = "https://api.64clouds.com/v1/getServiceInfo"
-	defaultCacheTTL        = 5 * time.Minute
-	requestTimeout         = 8 * time.Second
+	ConfigKey               = "official_traffic_sources"
+	defaultBandwagonAPIURL  = "https://api.64clouds.com/v1/getServiceInfo"
+	defaultVPSHostingAPIURL = "https://vps.hosting/api"
+	defaultCacheTTL         = 5 * time.Minute
+	requestTimeout          = 8 * time.Second
 )
 
 type SourceConfig struct {
-	Provider        string `json:"provider"`
-	Enabled         bool   `json:"enabled"`
-	Endpoint        string `json:"endpoint,omitempty"`
-	VEID            string `json:"veid,omitempty"`
-	APIKey          string `json:"api_key,omitempty"`
+	Provider string `json:"provider"`
+	Enabled  bool   `json:"enabled"`
+	Endpoint string `json:"endpoint,omitempty"`
+	VEID     string `json:"veid,omitempty"`
+	APIKey   string `json:"api_key,omitempty"`
+	// VPS.hosting credentials. Token takes precedence over Username/Password.
+	ServiceID       string `json:"service_id,omitempty"`
+	Token           string `json:"token,omitempty"`
+	Username        string `json:"username,omitempty"`
+	Password        string `json:"password,omitempty"`
+	TrafficUnit     string `json:"traffic_unit,omitempty"`
 	DisplayName     string `json:"display_name,omitempty"`
 	CacheTTLSeconds int    `json:"cache_ttl_seconds,omitempty"`
 
@@ -205,6 +212,8 @@ func fetchSnapshot(ctx context.Context, uuid string, cfg SourceConfig) (Snapshot
 	switch normalizeProvider(cfg.Provider) {
 	case "bandwagon", "bandwagonhost", "kiwivm", "64clouds":
 		return fetchBandwagonSnapshot(ctx, uuid, cfg)
+	case "vps", "vps-hosting", "vps_hosting", "vpshosting", "vps.hosting", "v.ps", "v.ps-hosting":
+		return fetchVPSHostingSnapshot(ctx, uuid, cfg)
 	case "collector-cache", "cache", "dmit-cache", "greencloud-cache", "manual-cache":
 		return fetchCollectorCacheSnapshot(uuid, cfg)
 	default:
@@ -399,6 +408,311 @@ func fetchBandwagonSnapshot(ctx context.Context, uuid string, cfg SourceConfig) 
 		return Snapshot{}, err
 	}
 	return parseBandwagonSnapshot(uuid, cfg, body)
+}
+
+func fetchVPSHostingSnapshot(ctx context.Context, uuid string, cfg SourceConfig) (Snapshot, error) {
+	serviceID := strings.TrimSpace(cfg.ServiceID)
+	if serviceID == "" {
+		return Snapshot{}, errors.New("missing service_id")
+	}
+
+	endpoint := strings.TrimRight(strings.TrimSpace(cfg.Endpoint), "/")
+	if endpoint == "" {
+		endpoint = defaultVPSHostingAPIURL
+	}
+	baseURL, err := url.Parse(endpoint)
+	if err != nil || baseURL.Scheme == "" || baseURL.Host == "" {
+		return Snapshot{}, errors.New("invalid endpoint")
+	}
+	baseURL.Path = strings.TrimRight(baseURL.Path, "/") + "/service/" + url.PathEscape(serviceID) + "/bandwidth"
+	baseURL.RawQuery = ""
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL.String(), nil)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	req.Header.Set("Accept", "application/json")
+	token := strings.TrimSpace(cfg.Token)
+	if token == "" {
+		// APIKey is accepted as a backwards-compatible token alias.
+		token = strings.TrimSpace(cfg.APIKey)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	} else if strings.TrimSpace(cfg.Username) != "" && strings.TrimSpace(cfg.Password) != "" {
+		req.SetBasicAuth(strings.TrimSpace(cfg.Username), cfg.Password)
+	} else {
+		return Snapshot{}, errors.New("missing token or username/password")
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return Snapshot{}, fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return Snapshot{}, err
+	}
+	return parseVPSHostingSnapshot(uuid, cfg, body)
+}
+
+func parseVPSHostingSnapshot(uuid string, cfg SourceConfig, body []byte) (Snapshot, error) {
+	var raw any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return Snapshot{}, err
+	}
+	if message := findStringValue(raw, "error", "error_message", "errorMessage", "detail"); strings.TrimSpace(message) != "" {
+		return Snapshot{}, fmt.Errorf("provider error: %s", message)
+	}
+
+	unit := strings.TrimSpace(cfg.TrafficUnit)
+	used, usedOK := findTrafficValue(raw, unit,
+		"used_bytes", "usedBytes", "usage_bytes", "bandwidth_used", "bandwidth_usage", "data_used", "traffic_used", "used_traffic", "total_used", "data_counter", "consumed", "used")
+	limit, limitOK := findTrafficValue(raw, unit,
+		"limit_bytes", "limitBytes", "bandwidth_limit", "data_limit", "traffic_limit", "quota", "quota_bytes", "allocated", "plan_limit", "limit", "total")
+	remaining, remainingOK := findTrafficValue(raw, unit,
+		"remaining_bytes", "remainingBytes", "bandwidth_remaining", "data_remaining", "traffic_remaining", "available", "free_bytes", "free", "remaining")
+
+	// Some providers expose only upload/download counters. Use them only as a
+	// fallback; a field explicitly named "used" always wins.
+	if !usedOK {
+		var upload, download float64
+		upload, uploadOK := findTrafficValue(raw, unit, "upload_bytes", "uploaded_bytes", "upload", "uploaded", "outbound", "egress")
+		download, downloadOK := findTrafficValue(raw, unit, "download_bytes", "downloaded_bytes", "download", "downloaded", "inbound", "ingress")
+		if uploadOK || downloadOK {
+			used = upload + download
+			usedOK = true
+		}
+	}
+	if !usedOK && limitOK && remainingOK {
+		used = limit - remaining
+		usedOK = true
+	}
+	if !remainingOK && limitOK && usedOK {
+		remaining = math.Max(limit-used, 0)
+		remainingOK = true
+	}
+	if !usedOK && !limitOK && !remainingOK {
+		return Snapshot{}, errors.New("missing traffic fields in VPS.hosting response")
+	}
+
+	usedBytes := safeInt64(used)
+	limitBytes := safeInt64(limit)
+	remainingBytes := safeInt64(remaining)
+	if limitBytes > 0 && !remainingOK {
+		remainingBytes = maxInt64(limitBytes-usedBytes, 0)
+	}
+	if limitBytes > 0 && remainingBytes > limitBytes {
+		remainingBytes = limitBytes
+	}
+	if usedBytes > 0 && limitBytes > 0 && remainingBytes == 0 {
+		remainingBytes = maxInt64(limitBytes-usedBytes, 0)
+	}
+
+	sourceName := strings.TrimSpace(cfg.DisplayName)
+	if sourceName == "" {
+		sourceName = "V.PS 官方 API"
+	}
+	provider := strings.TrimSpace(cfg.Provider)
+	if provider == "" {
+		provider = "vps-hosting"
+	}
+	return Snapshot{
+		ClientUUID:     uuid,
+		Provider:       normalizeProvider(provider),
+		SourceName:     sourceName,
+		UsedBytes:      usedBytes,
+		LimitBytes:     limitBytes,
+		RemainingBytes: remainingBytes,
+		ResetAt:        parseVPSResetAt(raw),
+		UpdatedAt:      time.Now(),
+	}, nil
+}
+
+func findTrafficValue(raw any, unit string, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		if value, found := findKeyValue(raw, key); found {
+			if parsed, ok := parseTrafficValue(value, unit); ok {
+				return parsed, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func findStringValue(raw any, keys ...string) string {
+	for _, key := range keys {
+		if value, found := findKeyValue(raw, key); found {
+			if text, ok := value.(string); ok {
+				return strings.TrimSpace(text)
+			}
+		}
+	}
+	return ""
+}
+
+func findKeyValue(raw any, wanted string) (any, bool) {
+	wanted = normalizeJSONKey(wanted)
+	switch value := raw.(type) {
+	case map[string]any:
+		for key, nested := range value {
+			if normalizeJSONKey(key) == wanted {
+				return nested, true
+			}
+		}
+		for _, nested := range value {
+			if found, ok := findKeyValue(nested, wanted); ok {
+				return found, true
+			}
+		}
+	case []any:
+		for _, nested := range value {
+			if found, ok := findKeyValue(nested, wanted); ok {
+				return found, true
+			}
+		}
+	}
+	return nil, false
+}
+
+func normalizeJSONKey(key string) string {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.ReplaceAll(key, "_", "")
+	key = strings.ReplaceAll(key, "-", "")
+	key = strings.ReplaceAll(key, ".", "")
+	return key
+}
+
+func parseTrafficValue(value any, defaultUnit string) (float64, bool) {
+	if object, ok := value.(map[string]any); ok {
+		unit := defaultUnit
+		if valueUnit, exists := object["unit"]; exists {
+			if text, ok := valueUnit.(string); ok && strings.TrimSpace(text) != "" {
+				unit = text
+			}
+		}
+		for _, key := range []string{"value", "amount", "bytes", "size", "total"} {
+			if nested, exists := object[key]; exists {
+				return parseTrafficValueWithUnit(nested, unit)
+			}
+		}
+		return 0, false
+	}
+	return parseTrafficValueWithUnit(value, defaultUnit)
+}
+
+func parseTrafficValueWithUnit(value any, unit string) (float64, bool) {
+	switch number := value.(type) {
+	case float64:
+		return number * trafficUnitMultiplier(unit), number >= 0
+	case float32:
+		return float64(number) * trafficUnitMultiplier(unit), number >= 0
+	case int:
+		return float64(number) * trafficUnitMultiplier(unit), number >= 0
+	case int64:
+		return float64(number) * trafficUnitMultiplier(unit), number >= 0
+	case json.Number:
+		parsed, err := number.Float64()
+		return parsed * trafficUnitMultiplier(unit), err == nil && parsed >= 0
+	case string:
+		return parseTrafficString(number, unit)
+	default:
+		return 0, false
+	}
+}
+
+func parseTrafficString(value, defaultUnit string) (float64, bool) {
+	value = strings.TrimSpace(strings.ReplaceAll(value, ",", ""))
+	if value == "" {
+		return 0, false
+	}
+	fields := strings.Fields(value)
+	if len(fields) == 1 {
+		if parsed, err := strconv.ParseFloat(fields[0], 64); err == nil {
+			return parsed * trafficUnitMultiplier(defaultUnit), parsed >= 0
+		}
+		compact := strings.ToUpper(fields[0])
+		for _, suffix := range []string{"PIB", "PB", "TIB", "TB", "GIB", "GB", "MIB", "MB", "KIB", "KB", "B"} {
+			if !strings.HasSuffix(compact, suffix) || len(compact) == len(suffix) {
+				continue
+			}
+			parsed, err := strconv.ParseFloat(compact[:len(compact)-len(suffix)], 64)
+			if err == nil && parsed >= 0 {
+				return parsed * trafficUnitMultiplier(suffix), true
+			}
+		}
+		return 0, false
+	}
+	parsed, err := strconv.ParseFloat(fields[0], 64)
+	if err != nil || parsed < 0 {
+		return 0, false
+	}
+	return parsed * trafficUnitMultiplier(fields[1]), true
+}
+
+func trafficUnitMultiplier(unit string) float64 {
+	switch strings.ToUpper(strings.TrimSpace(unit)) {
+	case "B", "BYTE", "BYTES", "":
+		return 1
+	case "KB":
+		return 1 << 10
+	case "KIB":
+		return 1 << 10
+	case "MB":
+		return 1 << 20
+	case "MIB":
+		return 1 << 20
+	case "GB":
+		return 1 << 30
+	case "GIB":
+		return 1 << 30
+	case "TB":
+		return 1 << 40
+	case "TIB":
+		return 1 << 40
+	case "PB":
+		return 1 << 50
+	case "PIB":
+		return 1 << 50
+	default:
+		return 1
+	}
+}
+
+func parseVPSResetAt(raw any) time.Time {
+	for _, key := range []string{"reset_at", "resetAt", "next_reset", "nextReset", "data_next_reset", "reset"} {
+		if value, found := findKeyValue(raw, key); found {
+			if parsed, ok := parseTimeValue(value); ok {
+				return parsed
+			}
+		}
+	}
+	return time.Time{}
+}
+
+func parseTimeValue(value any) (time.Time, bool) {
+	if number, ok := parseTrafficValue(value, ""); ok && number > 0 {
+		seconds := number
+		if seconds > 1e12 {
+			seconds /= 1000
+		}
+		return time.Unix(safeInt64(seconds), 0), true
+	}
+	text, ok := value.(string)
+	if !ok {
+		return time.Time{}, false
+	}
+	text = strings.TrimSpace(text)
+	for _, layout := range []string{time.RFC3339, time.RFC3339Nano, "2006-01-02 15:04:05", "2006-01-02"} {
+		if parsed, err := time.Parse(layout, text); err == nil {
+			return parsed, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func parseBandwagonSnapshot(uuid string, cfg SourceConfig, body []byte) (Snapshot, error) {

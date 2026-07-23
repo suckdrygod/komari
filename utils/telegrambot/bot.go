@@ -983,7 +983,7 @@ func (b *bot) sendRemaining(ctx context.Context, selector string) {
 	reports := agent_runtime.GetLatestReport()
 	for _, client := range list {
 		if snapshot, ok := officialtraffic.GetSnapshot(client); ok {
-			_ = b.sendEphemeral(ctx, formatOfficialTrafficCard(client, snapshot, "官方剩余", b.location), nil)
+			_ = b.sendEphemeral(ctx, formatOfficialTrafficCard(client, snapshot, "官方已用", b.location), nil)
 			continue
 		}
 		totals := notifier.TrafficTotals{}
